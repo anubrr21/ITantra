@@ -27,14 +27,7 @@ private const val TAG = "WifiDirectTransport"
 private const val PORT = 8988
 private const val CONNECT_TIMEOUT_MS = 10_000
 
-/**
- * Primary transport: WiFi Direct gives ~200m range and far higher throughput than
- * classic Bluetooth, which is why it's the default link (Bluetooth is the fallback —
- * see BluetoothClassicTransport). WiFi P2P negotiates a "group owner" automatically;
- * whichever side ends up as owner runs a plain TCP server, the other side connects as
- * a client. The data channel itself is a boring TCP socket carrying [FrameCodec] frames.
- */
-@SuppressLint("MissingPermission") // location/nearby-wifi permissions requested in MainActivity
+@SuppressLint("MissingPermission")
 class WifiDirectTransport(
     private val context: Context,
     private val scope: CoroutineScope,
@@ -75,7 +68,6 @@ class WifiDirectTransport(
         }
     }
 
-    /** Must be called once (e.g. from the hosting Service's onCreate) before use. */
     fun register() {
         val filter = IntentFilter().apply {
             addAction(WifiP2pManager.WIFI_P2P_PEERS_CHANGED_ACTION)
@@ -104,9 +96,6 @@ class WifiDirectTransport(
     }
 
     override fun becomeHost() {
-        // WiFi P2P negotiates group ownership itself once a connection forms; nothing to
-        // force here. We just need to be discoverable, which discoverPeers() + the other
-        // side's connectTo() already handles.
         register()
     }
 

@@ -22,20 +22,13 @@ import java.util.UUID
 
 private const val TAG = "BluetoothClassicTransport"
 
-/**
- * Fallback transport for devices/situations where WiFi Direct isn't usable. Devices
- * must already be paired via system Bluetooth settings — this class only owns the
- * RFCOMM data channel, the same pattern used by the reference open-source Android
- * walkie-talkie apps this design was based on.
- */
-@SuppressLint("MissingPermission") // BLUETOOTH_CONNECT/SCAN requested in MainActivity
+@SuppressLint("MissingPermission")
 class BluetoothClassicTransport(
     context: Context,
     private val scope: CoroutineScope,
 ) : Transport {
 
     companion object {
-        // App-specific RFCOMM service UUID — must match on both ends of the link.
         val SERVICE_UUID: UUID = UUID.fromString("7a1e9f2e-2b7e-4f0a-9c1a-3f2b1c4d5e6f")
         const val SERVICE_NAME = "iTantraRadio"
     }
@@ -60,8 +53,6 @@ class BluetoothClassicTransport(
     }
 
     override fun stopDiscovery() {
-        // We only list already-bonded devices (pairing happens in system Bluetooth
-        // settings first), so there's no ongoing scan to cancel.
     }
 
     override fun becomeHost() {

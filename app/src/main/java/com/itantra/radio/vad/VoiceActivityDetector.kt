@@ -2,20 +2,11 @@ package com.itantra.radio.vad
 
 import kotlin.math.sqrt
 
-/** Detects whether a PCM16 frame contains speech. Used to find the pauses/stoppages the
- * problem statement asks the STT module to segment sentences on. */
 interface VoiceActivityDetector {
     fun isSpeech(frame: ByteArray): Boolean
     fun reset()
 }
 
-/**
- * Bring-up implementation: short-term RMS energy against a slowly adapting noise floor.
- * Zero model weight, trivial CPU cost — good enough to prove the PTT/segmentation
- * pipeline end to end. Phase 2 replaces this with WebRTC VAD or Silero VAD, which handle
- * real-world noise (wind, crowds, disaster/field conditions) far more robustly; this
- * class exists purely so the rest of the app has a real interface to build against now.
- */
 class EnergyVoiceActivityDetector(
     private val speechThresholdMultiplier: Double = 2.5,
     private val noiseFloorAdaptRate: Double = 0.05,

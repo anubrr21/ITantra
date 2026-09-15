@@ -34,21 +34,10 @@ import kotlinx.coroutines.launch
 
 private const val CHANNEL_ID = "itantra_radio"
 private const val NOTIFICATION_ID = 1
-
-/** Peer silence longer than this is treated as "stopped transmitting" for the UI. */
 private const val PEER_SILENCE_TIMEOUT_MS = 500L
 
 enum class RadioLink { WIFI_DIRECT, BLUETOOTH_CLASSIC }
 
-/**
- * Foreground service holding the live mic + transport connection for as long as the
- * radio link should stay up, independent of whether the activity is on screen — Android
- * kills background mic access without a foreground service, and a real walkie-talkie
- * has to keep working while the screen is off.
- *
- * Phase 1 scope: raw audio in, raw audio out. STT/TTS wiring (Phase 2+) will sit between
- * AudioCapturer/AudioPlayer and the transport without changing this class's shape much.
- */
 class RadioService : Service() {
 
     inner class LocalBinder : Binder() {
@@ -141,9 +130,6 @@ class RadioService : Service() {
             }
             .launchIn(serviceScope)
 
-        // There's no explicit "I stopped talking" message yet (Phase 1 is raw audio
-        // only), so a short silence timeout is what flips the RECEIVING indicator back
-        // to idle.
         watchdogJob = serviceScope.launch {
             while (isActive) {
                 delay(200)

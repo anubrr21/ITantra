@@ -13,31 +13,20 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.isActive
 
-/**
- * Shared audio constants for the whole app. 16kHz mono PCM16 is the standard input rate
- * for the speech models we'll integrate in later phases, so raw audio (Phase 1) and STT
- * (Phase 2+) both run through the same format end to end.
- */
 object AudioConfig {
     const val SAMPLE_RATE_HZ = 16_000
     const val CHANNEL_CONFIG_IN = AudioFormat.CHANNEL_IN_MONO
     const val CHANNEL_CONFIG_OUT = AudioFormat.CHANNEL_OUT_MONO
     const val ENCODING = AudioFormat.ENCODING_PCM_16BIT
 
-    /** 20ms frames: a standard speech-processing chunk size (320 samples @ 16kHz). */
     const val FRAME_DURATION_MS = 20
     const val FRAME_SAMPLES = SAMPLE_RATE_HZ * FRAME_DURATION_MS / 1000
     const val FRAME_BYTES = FRAME_SAMPLES * 2
 }
 
-/**
- * Captures the mic as a cold Flow of fixed-size 20ms PCM16 frames. Cold by design: the
- * flow only records while someone is collecting it, which is exactly the push-to-talk
- * behaviour we want (see PttController).
- */
 class AudioCapturer {
 
-    @SuppressLint("MissingPermission") // RECORD_AUDIO is requested in MainActivity before this runs
+    @SuppressLint("MissingPermission")
     fun capture(): Flow<ByteArray> = flow {
         val minBuffer = AudioRecord.getMinBufferSize(
             AudioConfig.SAMPLE_RATE_HZ,
@@ -68,7 +57,6 @@ class AudioCapturer {
     }.flowOn(Dispatchers.IO)
 }
 
-/** Streams PCM16 frames straight to the speaker as they arrive. */
 class AudioPlayer {
     private var audioTrack: AudioTrack? = null
 

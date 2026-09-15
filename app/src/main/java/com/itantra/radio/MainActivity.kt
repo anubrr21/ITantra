@@ -43,7 +43,7 @@ class MainActivity : ComponentActivity() {
 
     private val requestPermissions = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions(),
-    ) { /* Compose reacts to permission-gated actions when the user retries them. */ }
+    ) { }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
