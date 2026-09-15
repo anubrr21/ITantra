@@ -12,17 +12,16 @@ was deliberately deferred until two physical phones are available. Treat Phase 2
 - [x] **Phase 1 — Transport & PTT skeleton.** WiFi Direct + Bluetooth Classic behind a
       common `Transport` interface, raw 16kHz PCM audio streaming, push-to-talk +
       "phone mode", foreground service. No ML. Testable as a basic two-phone intercom.
-- [x] **Phase 2 — VAD + STT bring-up (Hindi + English).** `WebRtcVoiceActivityDetector`
-      (via `com.github.gkonovalov.android-vad:webrtc`) does real pause/stop detection.
-      `VoskSttEngine` (via `com.alphacephei:vosk-android`) is the fast baseline STT.
+- [x] **Phase 2 — VAD + STT bring-up (Hindi + English). Complete.**
+      `WebRtcVoiceActivityDetector` (via `com.github.gkonovalov.android-vad:webrtc`) does
+      real pause/stop detection. `VoskSttEngine` (via `com.alphacephei:vosk-android`) is
+      the fast baseline STT, with the actual `vosk-model-small-en-us-0.15` and
+      `vosk-model-small-hi-0.22` models bundled under `app/src/main/assets/`.
       `AndroidSystemTtsEngine` (the OS's built-in TTS) closes the loop end-to-end
       (text → speech) before touching any custom model. A new "Voice → text" toggle in
       the UI switches between this pipeline and Phase 1's raw-audio path, which is
-      untouched and still the default. **Not yet done: the actual Vosk model files
-      aren't bundled** — see `app/src/main/assets/README.md`. Without them, `sttEngine`
-      stays null and Voice → text mode simply produces no outgoing text (fails safe, no
-      crash); the TTS half works immediately since it needs no model files. Not yet
-      tested on real devices (see status note below).
+      untouched and still the default. Not yet tested on a real device (see status note
+      below) — that's the only thing left before calling this phase verified.
 - [ ] **Phase 3 — Accuracy upgrade: AI4Bharat IndicConformer (Hindi + English).** Export
       and quantize (int8, via PyTorch ExecuTorch — see MODEL_NOTES.md) the per-language
       IndicConformer checkpoints. Benchmark WER, real-time factor, and model size against

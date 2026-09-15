@@ -22,9 +22,8 @@ WebRTC-based VAD, gets transcribed by Vosk (English + Hindi) on pause, and the
 *recognized text* — not audio — is what actually goes over the wire, with the other
 phone's Android system TTS speaking it back out. This is the core of what the problem
 statement actually asks for (text over a low-bitrate link instead of streaming audio).
-It hasn't been run on a real device yet — see docs/ROADMAP.md's status note — and the
-actual Vosk model files aren't bundled yet either (see
-`app/src/main/assets/README.md`).
+The Vosk model files are downloaded and in place; the only thing left is actually
+running it on a device — see docs/ROADMAP.md's status note.
 
 See [docs/ROADMAP.md](docs/ROADMAP.md) for the full phased plan (VAD, STT, TTS,
 multilingual expansion, efficiency tuning) and
@@ -54,8 +53,8 @@ that is installed on this machine yet. Get it from
    WiFi Direct → Find peers** and select the host from the list.
 7. Once connected, hold the big button to transmit (release to stop), or flip **Phone
    mode** on for an always-open call. Flip **Voice → text** on to switch to the STT/TTS
-   pipeline instead of raw audio (needs the Vosk model files in place first — see
-   `app/src/main/assets/README.md` — otherwise it just won't produce any text yet).
+   pipeline instead of raw audio — pick English or Hindi, talk, and the recognized text
+   (not audio) is what actually crosses the link.
 
 If WiFi Direct fails to connect (some phone/router combos are picky about it), fall back
 to **Connect via Bluetooth** — pair the two phones in system Bluetooth settings first,

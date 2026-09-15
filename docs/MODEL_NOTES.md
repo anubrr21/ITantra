@@ -28,10 +28,11 @@ repeating the process for the other 8 languages.
 - VAD: `com.github.gkonovalov.android-vad:webrtc:2.0.10` (JitPack) — a pure Kotlin/JNI
   port of WebRTC's VAD, no separate native build step needed. `EnergyVoiceActivityDetector`
   (hand-rolled, Phase 1) is kept in the codebase but no longer used.
-- STT bring-up: `com.alphacephei:vosk-android:0.3.75` (Maven Central). Needs unzipped
-  model folders `model-en-us` (from `vosk-model-small-en-us-0.15`) and `model-hi` (from
-  `vosk-model-small-hi-0.22`) under `app/src/main/assets/` — not fetched yet, see
-  `app/src/main/assets/README.md`.
+- STT bring-up: `com.alphacephei:vosk-android:0.3.75` (Maven Central). Uses unzipped
+  model folders `model-en-us` (from `vosk-model-small-en-us-0.15`, ~68MB unzipped) and
+  `model-hi` (from `vosk-model-small-hi-0.22`, ~79MB unzipped) under
+  `app/src/main/assets/` — downloaded and in place (git-ignored, not committed; see
+  `app/src/main/assets/README.md` for how to re-fetch them on a fresh clone).
 - TTS bring-up: Android's built-in `android.speech.tts.TextToSpeech` — zero extra
   dependency, zero model files.
 
