@@ -25,3 +25,6 @@ ml/**/data/
 ml/.venv/
 __pycache__/
 *.pyc
+
+app/src/main/assets/model-en-us/
+app/src/main/assets/model-hi/

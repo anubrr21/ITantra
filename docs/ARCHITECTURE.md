@@ -16,12 +16,18 @@ UI (Compose)  ── PairingScreen, RadioScreen
      │
 PttController  ── pure state machine: PUSH_TO_TALK vs PHONE_MODE, IDLE/TRANSMITTING/RECEIVING
      │
-RadioService (foreground Service) ── owns the mic, the speaker, and the active Transport;
-     │                                 wires capture → [future: VAD → STT →] Transport.send()
-     │                                 and Transport.incomingFrames() → [future: TTS →] speaker
+RadioService (foreground Service) ── owns the mic, the speaker, the active Transport, and
+     │                                 (Phase 2+) the VAD/STT/TTS engines. TransmissionMode
+     │                                 picks the path: RAW_AUDIO sends mic frames straight
+     │                                 through; VOICE_TEXT runs them through VAD → SttEngine,
+     │                                 and sends the recognized text instead of audio.
+     │                                 Incoming RadioFrame.Audio plays through the speaker;
+     │                                 RadioFrame.Text goes to TtsEngine.speak().
      │
 AudioCapturer / AudioPlayer  ── AudioRecord/AudioTrack, 16kHz mono PCM16, 20ms frames
      │
+RadioFrame / RadioFrameCodec  ── 1-byte type tag (Audio | Text) wrapping the payload;
+     │                            everything below this line is unaware it exists
 Transport (interface)  ── WifiDirectTransport | BluetoothClassicTransport
      │
 FrameCodec  ── length-prefixed framing over the raw socket byte stream
@@ -80,12 +86,28 @@ the next begins. Phase 1 frames are raw audio chunks; Phase 2+ will use the same
 send recognized-text messages (much smaller than audio, which is the whole point of the
 problem statement).
 
-## What's deliberately not built yet
+## Phase 2: VAD + STT/TTS bring-up
 
-- **VAD**: `EnergyVoiceActivityDetector` exists as a real, working but simple
-  energy-threshold VAD — good enough to prove segmentation logic, not accurate enough for
-  noisy field conditions. Phase 2 upgrades to WebRTC VAD or Silero VAD.
-- **STT/TTS**: `SttEngine`/`TtsEngine` are interfaces only. Nothing implements them yet —
-  Phase 1 sends raw audio directly, bypassing them entirely.
-- **Multilingual UI**: language selection isn't built — there's only one (implicit)
-  language right now because there's no STT/TTS to select a language for.
+- **VAD**: `WebRtcVoiceActivityDetector` wraps `com.konovalov.vad.webrtc.VadWebRTC`
+  (from `com.github.gkonovalov.android-vad:webrtc`, JitPack). `EnergyVoiceActivityDetector`
+  still exists as the original hand-rolled fallback but isn't wired in anywhere anymore.
+  `RadioService` tracks the speech→silence transition itself (the library only says
+  "is this frame speech", not "utterance just ended") and calls `SttEngine.endUtterance()`
+  on that edge — this is the "detecting pauses and stoppages" the spec asks for.
+- **STT**: `VoskSttEngine` (`com.alphacephei:vosk-android`) feeds frames into a
+  `org.vosk.Recognizer` only while VAD says speech is active, then calls
+  `finalResult()` on the pause edge and recreates the recognizer for the next utterance.
+  It needs an unpacked Vosk model directory to construct (see
+  `app/src/main/assets/README.md` — **the actual model files aren't bundled yet**,
+  fetching them is a separate, explicit step because they're tens of MB each).
+- **TTS**: `AndroidSystemTtsEngine` wraps the OS's built-in `TextToSpeech` — no model
+  files needed, works immediately. This is the Phase 2 bring-up baseline Phase 4 will
+  replace with the on-device AI4Bharat Indic-TTS model.
+- **Language selection**: `SupportedLanguage` (English, Hindi so far, per the Phase 2
+  scope decision) ties together a Vosk asset folder name and a TTS `Locale`.
+  `RadioService.setLanguage()` tears down and rebuilds both engines for the new language.
+- **Not disturbing Phase 1**: `Transport`, `FrameCodec`, `WifiDirectTransport`, and
+  `BluetoothClassicTransport` are untouched. The only wire-format change is
+  `RadioFrame`'s 1-byte type tag, added in `RadioService` above the transport layer — the
+  raw-audio walkie-talkie still behaves identically to a user, it's picked via a new
+  "Voice → text" toggle that defaults off (`TransmissionMode.RAW_AUDIO`).

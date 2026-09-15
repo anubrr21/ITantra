@@ -1,5 +1,9 @@
 package com.itantra.radio.vad
 
+import com.konovalov.vad.webrtc.VadWebRTC
+import com.konovalov.vad.webrtc.config.FrameSize
+import com.konovalov.vad.webrtc.config.Mode
+import com.konovalov.vad.webrtc.config.SampleRate
 import kotlin.math.sqrt
 
 interface VoiceActivityDetector {
@@ -44,5 +48,23 @@ class EnergyVoiceActivityDetector(
             i += 2
         }
         return sqrt(sumSquares / (frame.size / 2))
+    }
+}
+
+class WebRtcVoiceActivityDetector : VoiceActivityDetector, AutoCloseable {
+    private val vad = VadWebRTC(
+        sampleRate = SampleRate.SAMPLE_RATE_16K,
+        frameSize = FrameSize.FRAME_SIZE_320,
+        mode = Mode.VERY_AGGRESSIVE,
+        silenceDurationMs = 300,
+        speechDurationMs = 50,
+    )
+
+    override fun isSpeech(frame: ByteArray): Boolean = vad.isSpeech(frame)
+
+    override fun reset() {}
+
+    override fun close() {
+        vad.close()
     }
 }

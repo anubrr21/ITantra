@@ -24,6 +24,17 @@ purpose-built, open-source Indian-language models and specializing the *deployme
 (quantized) against it for Hindi + English before deciding what ships and before
 repeating the process for the other 8 languages.
 
+**Phase 2 implementation, locked in:**
+- VAD: `com.github.gkonovalov.android-vad:webrtc:2.0.10` (JitPack) — a pure Kotlin/JNI
+  port of WebRTC's VAD, no separate native build step needed. `EnergyVoiceActivityDetector`
+  (hand-rolled, Phase 1) is kept in the codebase but no longer used.
+- STT bring-up: `com.alphacephei:vosk-android:0.3.75` (Maven Central). Needs unzipped
+  model folders `model-en-us` (from `vosk-model-small-en-us-0.15`) and `model-hi` (from
+  `vosk-model-small-hi-0.22`) under `app/src/main/assets/` — not fetched yet, see
+  `app/src/main/assets/README.md`.
+- TTS bring-up: Android's built-in `android.speech.tts.TextToSpeech` — zero extra
+  dependency, zero model files.
+
 ## TTS candidates
 
 | Model | Languages | License | Notes |
@@ -69,6 +80,8 @@ The problem statement requires open-source/TinyML frameworks and explicitly allo
 - https://github.com/pytorch/android-demo-app/blob/master/SpeechRecognition/README.md
 - https://alphacephei.com/vosk/ and https://alphacephei.com/vosk/android
 - https://github.com/neso613/ASR_TFLite
+- https://github.com/gkonovalov/android-vad (WebRTC VAD Android port, used in Phase 2)
+- https://central.sonatype.com/artifact/com.alphacephei/vosk-android (used in Phase 2)
 - https://github.com/murtaza98/Walkie-Talkie (WiFi Direct walkie-talkie reference)
 - https://github.com/gms298/Android-Walkie-Talkie (Bluetooth walkie-talkie reference)
 - https://f-droid.org/packages/org.jsl.wfwt/ (WiFi walkie-talkie reference)

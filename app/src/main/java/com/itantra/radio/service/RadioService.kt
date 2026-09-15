@@ -12,12 +12,21 @@ import androidx.core.app.NotificationCompat
 import com.itantra.radio.R
 import com.itantra.radio.audio.AudioCapturer
 import com.itantra.radio.audio.AudioPlayer
+import com.itantra.radio.lang.SupportedLanguage
 import com.itantra.radio.network.BluetoothClassicTransport
+import com.itantra.radio.network.RadioFrame
+import com.itantra.radio.network.RadioFrameCodec
 import com.itantra.radio.network.Transport
 import com.itantra.radio.network.TransportPeer
 import com.itantra.radio.network.WifiDirectTransport
 import com.itantra.radio.ptt.PttController
 import com.itantra.radio.ptt.PttMode
+import com.itantra.radio.stt.SttEngine
+import com.itantra.radio.stt.VoskModelProvisioner
+import com.itantra.radio.stt.VoskSttEngine
+import com.itantra.radio.tts.AndroidSystemTtsEngine
+import com.itantra.radio.tts.TtsEngine
+import com.itantra.radio.vad.WebRtcVoiceActivityDetector
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -38,6 +47,8 @@ private const val PEER_SILENCE_TIMEOUT_MS = 500L
 
 enum class RadioLink { WIFI_DIRECT, BLUETOOTH_CLASSIC }
 
+enum class TransmissionMode { RAW_AUDIO, VOICE_TEXT }
+
 class RadioService : Service() {
 
     inner class LocalBinder : Binder() {
@@ -50,9 +61,23 @@ class RadioService : Service() {
     val pttController = PttController()
     private val audioCapturer = AudioCapturer()
     private val audioPlayer = AudioPlayer()
+    private val vad = WebRtcVoiceActivityDetector()
+    private var wasSpeaking = false
 
     private val _transport = MutableStateFlow<Transport?>(null)
     val transportFlow: StateFlow<Transport?> = _transport.asStateFlow()
+
+    private val _transmissionMode = MutableStateFlow(TransmissionMode.RAW_AUDIO)
+    val transmissionModeFlow: StateFlow<TransmissionMode> = _transmissionMode.asStateFlow()
+
+    private val _language = MutableStateFlow(SupportedLanguage.ENGLISH)
+    val languageFlow: StateFlow<SupportedLanguage> = _language.asStateFlow()
+
+    private val _recognizedText = MutableStateFlow("")
+    val recognizedTextFlow: StateFlow<String> = _recognizedText.asStateFlow()
+
+    private var sttEngine: SttEngine? = null
+    private var ttsEngine: TtsEngine? = null
 
     private var captureJob: Job? = null
     private var receiveJob: Job? = null
@@ -62,6 +87,7 @@ class RadioService : Service() {
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
+        setLanguage(SupportedLanguage.ENGLISH)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -100,6 +126,33 @@ class RadioService : Service() {
         applyCaptureState()
     }
 
+    fun setTransmissionMode(mode: TransmissionMode) {
+        _transmissionMode.value = mode
+        wasSpeaking = false
+    }
+
+    fun setLanguage(language: SupportedLanguage) {
+        _language.value = language
+
+        sttEngine?.stop()
+        sttEngine = null
+
+        ttsEngine?.stop()
+        ttsEngine = AndroidSystemTtsEngine(applicationContext, language.ttsLocale, language.code)
+
+        VoskModelProvisioner.unpack(
+            applicationContext,
+            language.voskAssetFolder,
+            onReady = { model ->
+                val engine = VoskSttEngine(model, language.code)
+                engine.setOnResult { text -> onRecognizedText(text) }
+                engine.start()
+                sttEngine = engine
+            },
+            onError = { },
+        )
+    }
+
     private fun applyCaptureState() {
         if (pttController.shouldCaptureMic) startCapture() else stopCapture()
     }
@@ -108,7 +161,7 @@ class RadioService : Service() {
         if (captureJob?.isActive == true) return
         val transport = _transport.value ?: return
         captureJob = serviceScope.launch {
-            audioCapturer.capture().onEach { frame -> transport.send(frame) }.launchIn(this)
+            audioCapturer.capture().onEach { frame -> handleCapturedFrame(transport, frame) }.launchIn(this)
         }
     }
 
@@ -117,16 +170,40 @@ class RadioService : Service() {
         captureJob = null
     }
 
+    private fun handleCapturedFrame(transport: Transport, frame: ByteArray) {
+        when (_transmissionMode.value) {
+            TransmissionMode.RAW_AUDIO -> transport.send(RadioFrameCodec.encode(RadioFrame.Audio(frame)))
+            TransmissionMode.VOICE_TEXT -> {
+                val speaking = vad.isSpeech(frame)
+                if (speaking) {
+                    sttEngine?.acceptAudioFrame(frame)
+                } else if (wasSpeaking) {
+                    sttEngine?.endUtterance()
+                }
+                wasSpeaking = speaking
+            }
+        }
+    }
+
+    private fun onRecognizedText(text: String) {
+        _recognizedText.value = text
+        _transport.value?.send(RadioFrameCodec.encode(RadioFrame.Text(text)))
+    }
+
     private fun listenForIncomingAudio(transport: Transport) {
         receiveJob?.cancel()
         watchdogJob?.cancel()
         audioPlayer.start()
 
         receiveJob = transport.incomingFrames()
-            .onEach { frame ->
+            .onEach { bytes ->
                 lastPeerFrameAtMs = System.currentTimeMillis()
                 pttController.onPeerTransmitting(true)
-                audioPlayer.playFrame(frame)
+                when (val frame = RadioFrameCodec.decode(bytes)) {
+                    is RadioFrame.Audio -> audioPlayer.playFrame(frame.pcm)
+                    is RadioFrame.Text -> ttsEngine?.speak(frame.text, isAlert = false)
+                    null -> Unit
+                }
             }
             .launchIn(serviceScope)
 
@@ -146,6 +223,9 @@ class RadioService : Service() {
         receiveJob?.cancel()
         watchdogJob?.cancel()
         audioPlayer.stop()
+        vad.close()
+        sttEngine?.stop()
+        ttsEngine?.stop()
         _transport.value?.disconnect()
         serviceScope.cancel()
         super.onDestroy()
