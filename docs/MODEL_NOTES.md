@@ -36,6 +36,52 @@ repeating the process for the other 8 languages.
 - TTS bring-up: Android's built-in `android.speech.tts.TextToSpeech` — zero extra
   dependency, zero model files.
 
+**Phase 3 status: blocked on a real, external gate — not something to route around.**
+Every AI4Bharat STT model on Hugging Face (`indic-conformer-600m-multilingual`,
+`indicconformer_stt_hi_hybrid_ctc_rnnt_large`, `indicwav2vec-hindi`) is **gated**: the
+page banner reads "You need to agree to share your contact information to access this
+model," requiring a free Hugging Face account and clicking through the agreement before
+any files can be downloaded. This can't be scripted or done on the user's behalf — it's
+an identity/consent step only the account owner can take. Unblocking it:
+
+1. Create a free account at https://huggingface.co/join if you don't have one.
+2. Visit https://huggingface.co/ai4bharat/indic-conformer-600m-multilingual and click
+   "Agree and access repository."
+3. Generate a read-only token at https://huggingface.co/settings/tokens.
+4. In your own terminal (not something Claude can do — it needs an interactive prompt),
+   run `ml/.venv/Scripts/huggingface-cli.exe login` and paste the token when asked. This
+   caches it under your Windows user profile; it's never seen by or shared with Claude.
+
+Once logged in, `ml/stt/transcribe.py` and `ml/eval/wer_eval.py` will work as-is —
+`transformers.AutoModel.from_pretrained(..., trust_remote_code=True)` reads the cached
+token automatically.
+
+**Model choice for Phase 3, decided:** `ai4bharat/indic-conformer-600m-multilingual`
+via plain `transformers` (`trust_remote_code=True`), **not** the per-language
+`indicconformer_stt_hi_hybrid_ctc_rnnt_large` checkpoint. The per-language model is
+smaller (120M vs 600M params) but requires installing AI4Bharat's NeMo fork
+(`git clone https://github.com/AI4Bharat/NeMo.git`) — a much heavier, more fragile
+dependency chain (pytorch-lightning, hydra, sentencepiece, etc.) than plain
+`transformers`. The multilingual model trades some size for a dramatically simpler,
+more reliable setup, and it covers all remaining 8 non-English Indic languages needed
+for Phase 6 later, so it's not one-off work. Re-evaluate this trade-off once real
+benchmark numbers exist — if CPU/mobile inference on the 600M model turns out too slow,
+the per-language NeMo path becomes worth the setup cost.
+
+**Important caveat on language codes:** AI4Bharat's model card lists supported
+languages by name (Hindi, Bengali, Tamil, …), not by exact code string. `INDIC_CONFORMER_LANGUAGES`
+in `ml/eval/wer_eval.py` uses a best-effort ISO 639-1/639-3 guess (`hi`, `bn`, `ta`, …,
+falling back to 3-letter codes like `brx`/`doi`/`kok`/`mai`/`mni`/`sat` for languages
+without a 639-1 code) — **verify these against the model's actual `config.json` /
+`model_onnx.py` once you're past the login gate**, don't trust the guess blindly.
+
+**English has no AI4Bharat equivalent.** All AI4Bharat STT models are for "Indic"
+languages specifically and exclude English (confirmed: English is not in the 22-language
+list for `indic-conformer-600m-multilingual`). English stays on Vosk indefinitely unless
+a separate research track (Whisper, wav2vec2-base-960h) gets evaluated for it later —
+that's a deliberate scope correction from the original Phase 3 wording ("Hindi +
+English"), not an oversight.
+
 ## TTS candidates
 
 | Model | Languages | License | Notes |

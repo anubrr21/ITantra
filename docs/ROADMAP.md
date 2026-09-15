@@ -22,11 +22,18 @@ was deliberately deferred until two physical phones are available. Treat Phase 2
       the UI switches between this pipeline and Phase 1's raw-audio path, which is
       untouched and still the default. Not yet tested on a real device (see status note
       below) — that's the only thing left before calling this phase verified.
-- [ ] **Phase 3 — Accuracy upgrade: AI4Bharat IndicConformer (Hindi + English).** Export
-      and quantize (int8, via PyTorch ExecuTorch — see MODEL_NOTES.md) the per-language
-      IndicConformer checkpoints. Benchmark WER, real-time factor, and model size against
-      the Vosk baseline using the problem statement's own weighting (accuracy 40%,
-      efficiency 20%, latency 20%) to decide what ships.
+- [~] **Phase 3 — Accuracy upgrade: AI4Bharat IndicConformer (Hindi).** In progress,
+      blocked on one manual step. English dropped from this phase's scope — AI4Bharat
+      has no English model; see MODEL_NOTES.md. Real Python eval harness built at
+      `ml/stt/` and `ml/eval/` (loads the actual `indic-conformer-600m-multilingual`
+      model via `transformers`, transcribes real WAV files, computes real WER against
+      Vosk via `jiwer` — nothing mocked or hand-waved). **Blocked on:** the model is
+      gated on Hugging Face and needs a one-time manual login (see MODEL_NOTES.md for
+      exact steps) plus real recorded test audio (see `ml/eval/testset/README.md`) —
+      neither can be done by Claude. Once unblocked: run `ml/eval/wer_eval.py`, look at
+      the real WER/latency numbers, then decide whether to proceed to quantizing
+      (int8, via PyTorch ExecuTorch) and exporting for on-device use, or whether the
+      120M-param per-language NeMo checkpoint is worth its heavier setup cost instead.
 - [ ] **Phase 4 — TTS upgrade: AI4Bharat Indic-TTS.** Export FastPitch+HiFiGAN to ONNX
       Runtime Mobile, replace the system-TTS bring-up. Implement the spec's exact
       playback rules: normal messages play as a voice note, alert-type messages play at
@@ -49,7 +56,8 @@ was deliberately deferred until two physical phones are available. Treat Phase 2
 ## Why this order
 
 Training or fine-tuning is the highest-risk, highest-effort part of this project — it
-gets validated on 2 languages (Phase 3) before being repeated 8 more times (Phase 6),
-instead of discovering a fundamental problem after building all 10 language pipelines.
+gets validated on 1 language (Phase 3, Hindi — English has no AI4Bharat equivalent and
+stays on Vosk) before being repeated 8 more times (Phase 6), instead of discovering a
+fundamental problem after building all 10 language pipelines.
 Raw-audio transport (Phase 1) ships first because it's fully testable without any model
 work and de-risks the networking/PTT layer independently.

@@ -1,3 +1,10 @@
-# Populated in Phase 2/3 when model download/quantization/benchmarking scripts land.
-# Anticipated: torch, torchaudio, transformers, executorch, onnx, onnxruntime,
-# soundfile, jiwer (for WER scoring).
+torch
+torchaudio
+transformers
+accelerate
+huggingface_hub
+onnx
+onnxruntime
+jiwer
+soundfile
+vosk

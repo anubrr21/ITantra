@@ -1,8 +1,18 @@
 # Benchmarking harness
 
-Phase 3/6 work lands here: a WER scorer, real-time-factor (RTF) latency measurement, and
-model-size/RAM reporting, so every candidate model (Vosk vs IndicConformer, per
-language) gets scored against the problem statement's own weighting: accuracy 40%,
-efficiency 20%, latency 20%.
+`wer_eval.py` reads `manifest.tsv` (tab-separated: `wav_path`, `lang_code`,
+`reference_text`), runs each real recording through Vosk and — for Indic languages —
+through IndicConformer (CTC decoder), and prints real per-utterance transcripts, timing,
+and an aggregate WER via `jiwer`. English rows only get scored against Vosk (AI4Bharat
+has no English model).
 
-Nothing here yet — this is a placeholder until Phase 3 starts.
+It prints "no rows yet" against an empty manifest rather than fabricating a result —
+see `testset/README.md` for how to add real recorded test cases. This only produces a
+meaningful number once real speech (ideally several speakers, including noisy
+conditions matching the spec's disaster/alert use case) is in the manifest.
+
+Run: `ml/.venv/Scripts/python.exe ml/eval/wer_eval.py`
+
+Model size, RAM footprint, and real-time-factor measurement on an actual low/mid-range
+phone (not this dev machine) is Phase 7 scope — this harness only covers the accuracy
+side for now.
