@@ -1,0 +1,27 @@
+*.iml
+.gradle/
+/local.properties
+.idea/
+.DS_Store
+/build
+/captures
+.externalNativeBuild
+.cxx
+local.properties
+*.hprof
+.kotlin/
+
+# Android Studio generated
+app/build/
+app/release/
+
+# ML workspace: never commit downloaded model checkpoints or datasets
+ml/**/checkpoints/
+ml/**/*.pt
+ml/**/*.onnx
+ml/**/*.pte
+ml/**/*.tflite
+ml/**/data/
+ml/.venv/
+__pycache__/
+*.pyc
