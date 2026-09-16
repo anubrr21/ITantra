@@ -7,4 +7,5 @@ onnx
 onnxruntime
 jiwer
 soundfile
+sounddevice
 vosk
