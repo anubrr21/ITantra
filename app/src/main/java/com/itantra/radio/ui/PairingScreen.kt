@@ -28,6 +28,7 @@ import com.itantra.radio.service.RadioService
 @Composable
 fun PairingScreen(
     service: RadioService,
+    hasChosenLink: Boolean,
     transportState: TransportState,
     onLinkChosen: (RadioLink) -> Unit,
 ) {
@@ -40,7 +41,7 @@ fun PairingScreen(
         Text("Digital walkie-talkie radio link", style = MaterialTheme.typography.bodyMedium)
         Spacer(Modifier.height(32.dp))
 
-        if (transportState is TransportState.Idle) {
+        if (!hasChosenLink) {
             Button(onClick = { onLinkChosen(RadioLink.WIFI_DIRECT) }, modifier = Modifier.fillMaxWidth()) {
                 Text("Connect via WiFi Direct")
             }

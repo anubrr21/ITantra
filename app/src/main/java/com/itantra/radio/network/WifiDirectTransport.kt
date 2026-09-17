@@ -43,6 +43,7 @@ class WifiDirectTransport(
     private var socket: Socket? = null
     private var serverSocket: ServerSocket? = null
     private var discoveredDevices: Map<String, WifiP2pDevice> = emptyMap()
+    private var isRegistered = false
 
     private val receiver = object : BroadcastReceiver() {
         override fun onReceive(ctx: Context, intent: Intent) {
@@ -69,15 +70,19 @@ class WifiDirectTransport(
     }
 
     fun register() {
+        if (isRegistered) return
         val filter = IntentFilter().apply {
             addAction(WifiP2pManager.WIFI_P2P_PEERS_CHANGED_ACTION)
             addAction(WifiP2pManager.WIFI_P2P_CONNECTION_CHANGED_ACTION)
         }
         context.registerReceiver(receiver, filter)
+        isRegistered = true
     }
 
     fun unregister() {
+        if (!isRegistered) return
         runCatching { context.unregisterReceiver(receiver) }
+        isRegistered = false
     }
 
     override fun startDiscovery() {
@@ -86,7 +91,7 @@ class WifiDirectTransport(
         manager.discoverPeers(channel, object : WifiP2pManager.ActionListener {
             override fun onSuccess() { Log.d(TAG, "Peer discovery started") }
             override fun onFailure(reason: Int) {
-                _state.value = TransportState.Failed("WiFi Direct discovery failed: $reason")
+                _state.value = TransportState.Failed("WiFi Direct discovery failed: ${describeFailure(reason)}")
             }
         })
     }
@@ -109,9 +114,17 @@ class WifiDirectTransport(
         manager.connect(channel, config, object : WifiP2pManager.ActionListener {
             override fun onSuccess() { Log.d(TAG, "Connect requested") }
             override fun onFailure(reason: Int) {
-                _state.value = TransportState.Failed("WiFi Direct connect failed: $reason")
+                _state.value = TransportState.Failed("WiFi Direct connect failed: ${describeFailure(reason)}")
             }
         })
+    }
+
+    private fun describeFailure(reason: Int): String = when (reason) {
+        WifiP2pManager.ERROR -> "internal error ($reason)"
+        WifiP2pManager.P2P_UNSUPPORTED -> "WiFi Direct not supported on this device ($reason)"
+        WifiP2pManager.BUSY -> "WiFi Direct radio busy - try again in a moment ($reason)"
+        WifiP2pManager.NO_SERVICE_REQUESTS -> "no service requests ($reason)"
+        else -> "unknown ($reason)"
     }
 
     private fun runAsHost() {

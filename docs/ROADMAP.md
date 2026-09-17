@@ -4,18 +4,24 @@ Kept up to date as phases complete. No fixed deadline — phases are ordered to 
 the hardest parts (multilingual accuracy, on-device performance) early rather than
 leaving them to the end.
 
-**Status:** As of 2026-09-17, Phases 0-3b **compile and package into a real, complete
-debug APK** (`./gradlew :app:assembleDebug` succeeds — verified once Android Studio and
-the SDK finally landed on the research machine) — this is a step up from "should work"
-to "actually builds," but still short of "verified," since none of it has run on a real
-device yet. That's still deliberately deferred until two physical phones are available.
-See "Build environment notes" below for what it took to get a working build (several
-real dependency-version fixes, not just SDK installation).
+**Status:** As of 2026-09-17, Phases 0-3b compile and package into a real APK, and have
+now been **installed and exercised on a real physical phone** (Redmi A7 Pro 5G, 4GB
+RAM — genuinely low-end, exactly the spec's target hardware) via `adb`, one device at a
+time since a second phone isn't available yet. Real bugs were found and fixed, and the
+single biggest open risk in the whole project — whether the 880MB quantized
+IndicConformer model even loads on a low-end phone — passed. Full two-phone pairing is
+still untested. See "Build environment notes" and "Single-device real hardware testing"
+below for the details and why nobody should assume these are guesses.
 
 - [x] **Phase 0 — Scaffold.** Repo, Android project skeleton, Gradle config, docs.
 - [x] **Phase 1 — Transport & PTT skeleton.** WiFi Direct + Bluetooth Classic behind a
       common `Transport` interface, raw 16kHz PCM audio streaming, push-to-talk +
       "phone mode", foreground service. No ML. Testable as a basic two-phone intercom.
+      **Partially real-device tested (2026-09-17, single phone, see below):** app
+      launches and runs stably, permission flow works, WiFi Direct discovery and
+      Bluetooth Classic discovery/connect-attempt both exercised without crashing (WiFi
+      Direct hit a real hardware limitation on this specific phone, handled gracefully —
+      not our bug, see below). Full two-phone pairing still untested.
 - [x] **Phase 2 — VAD + STT bring-up (Hindi + English). Complete.**
       `WebRtcVoiceActivityDetector` (via `com.github.gkonovalov.android-vad:webrtc`) does
       real pause/stop detection. `VoskSttEngine` (via `com.alphacephei:vosk-android`) is
@@ -131,6 +137,66 @@ non-obvious fixes, recorded here so nobody "fixes" them back into a broken state
   efficiency-pass discussion about whether the 880MB quantized encoder is really
   viable for the spec's low-end-phone target.
 
-None of this has been run on an actual device yet — it compiles and packages, which is
-a real, meaningfully verified milestone, but "builds" and "works" are still two
-different claims.
+## Single-device real hardware testing (2026-09-17)
+
+Installed and exercised on the user's own phone — a **Redmi A7 Pro 5G, 4GB RAM,
+Android 16 (HyperOS 3.0.10)** — via `adb`, since a second phone wasn't available. Real
+bugs found and fixed, in order encountered:
+
+1. **Crash on launch: `SecurityException` starting the foreground service.** Android
+   14+ requires `RECORD_AUDIO` to already be granted *before* calling
+   `startForeground()` with `foregroundServiceType="microphone"`. `MainActivity` was
+   requesting the permission and starting the service at the same time, so the service
+   almost always lost the race. Fixed: only start the service immediately if the
+   permission is already granted; otherwise wait for the permission-result callback to
+   confirm `RECORD_AUDIO` before starting it (`MainActivity.kt`).
+2. **"Connect via WiFi Direct" appeared to do nothing.** Not a freeze — a real state
+   bug. A freshly-created `Transport` starts in `TransportState.Idle`, the *same* state
+   used to mean "no link chosen yet," so `PairingScreen` couldn't tell the two apart and
+   kept showing the initial two buttons forever. Fixed by passing an explicit
+   `hasChosenLink` boolean (`transport != null`) instead of inferring it from
+   `transportState` (`PairingScreen.kt`, `MainActivity.kt`).
+3. **Duplicate `BroadcastReceiver` registration.** `WifiDirectTransport.register()` had
+   no guard, so tapping "Find peers" more than once (or hitting both "Find peers" and
+   "Host") registered the same receiver twice, logged by Android as an "already
+   registered" warning — a real resource leak. Fixed with an `isRegistered` flag
+   (`WifiDirectTransport.kt`).
+4. **WiFi Direct discovery failed on this specific phone with `BUSY (2)`** — decoded
+   properly now instead of showing a bare integer (`WifiP2pManager` failure reasons
+   mapped to readable strings in `describeFailure()`). Root cause, confirmed via
+   `adb logcat`: `HalDevMgr: bestIfaceCreationProposal is null, requestIface=P2P,
+   existingIface=[name=wlan2 type=AP, name=wlan0 type=STA]` — **this phone's WiFi
+   chipset cannot run a P2P interface at the same time as a station (`STA`) connection
+   plus an access-point (`AP`) interface**, and the phone had its Mobile Hotspot on
+   (needed for the dev laptop's internet). This is a real hardware/firmware limitation
+   on this specific chipset, not a bug in the app — but it's a genuinely useful field
+   finding: **some real low-end phones cannot do WiFi Direct while hotspot/tethering is
+   active**, which is exactly the kind of condition that could occur during the spec's
+   actual disaster/field use case. Worth testing again once hotspot isn't needed, and
+   worth remembering as a real-world constraint on WiFi Direct's reliability — part of
+   why Bluetooth Classic exists as a fallback.
+5. **Bluetooth Classic tested and works as designed.** "Find peers" correctly lists
+   already-bonded devices (tested against the phone's paired earbuds); attempting to
+   connect to a bonded device that isn't running this app fails gracefully (expected —
+   it doesn't implement our custom RFCOMM service) without crashing the app.
+6. **The single biggest open risk in Phase 3b — verified, passed.** Temporarily forced
+   the app to load `IndicConformerSttEngine` (Hindi) immediately on startup instead of
+   its normal English default, specifically to test whether the ~900MB of ONNX assets
+   (880MB quantized encoder included) actually load on this real 4GB-RAM low-end phone
+   without an out-of-memory crash. Result: **it works.** Confirmed three ways —
+   (a) all 5 files copied byte-exact to internal storage (checked via `adb shell run-as`
+   diffing file sizes against the source), (b) 2+ minutes of stable memory monitoring via
+   `adb shell dumpsys meminfo` with zero crashes (process PSS settled around ~1GB, with
+   most of it pushed into compressed zRAM swap rather than resident RAM — Android's
+   memory management absorbed the large footprint instead of OOM-killing the process),
+   and (c) no Vosk-fallback log lines appeared, which only happens if
+   `IndicConformerSttEngine` construction threw and the code fell back to Vosk. This was
+   a temporary, reverted-immediately test change (not a permanent default) — see the git
+   history for the two commits bracketing it. **This does not mean performance is fine**
+   (inference speed under heavy zRAM swap is untested and likely to be slow — a Phase 7
+   question), but it means the model is not simply un-loadable on this class of device,
+   which was a real, credible risk before this test.
+
+Still not tested: full two-phone WiFi Direct/Bluetooth pairing, actual audio streaming
+end-to-end, VAD/STT/TTS running through the real UI (blocked on reaching `RadioScreen`,
+which requires a successful pairing), and anything in Phase 4+.

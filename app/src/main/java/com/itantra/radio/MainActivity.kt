@@ -5,6 +5,7 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
+import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.os.IBinder
@@ -43,12 +44,18 @@ class MainActivity : ComponentActivity() {
 
     private val requestPermissions = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions(),
-    ) { }
+    ) { results ->
+        if (results[Manifest.permission.RECORD_AUDIO] == true && radioService == null) {
+            startAndBindRadioService()
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if (hasRecordAudioPermission()) {
+            startAndBindRadioService()
+        }
         requestPermissions.launch(requiredPermissions())
-        startAndBindRadioService()
 
         setContent {
             ItantraTheme {
@@ -61,6 +68,9 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+
+    private fun hasRecordAudioPermission(): Boolean =
+        ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
 
     private fun startAndBindRadioService() {
         val intent = Intent(this, RadioService::class.java)
@@ -101,6 +111,7 @@ private fun RadioApp(service: RadioService) {
     } else {
         PairingScreen(
             service = service,
+            hasChosenLink = transport != null,
             transportState = transportState,
             onLinkChosen = { link -> service.useLink(link) },
         )
