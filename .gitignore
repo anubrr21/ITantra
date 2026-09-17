@@ -28,3 +28,6 @@ __pycache__/
 
 app/src/main/assets/model-en-us/
 app/src/main/assets/model-hi/
+
+# Personal voice recordings used for local WER testing - never commit these
+ml/eval/testset/*.wav

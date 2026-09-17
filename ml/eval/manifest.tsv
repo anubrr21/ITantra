@@ -1,1 +1,6 @@
 wav_path	lang_code	reference_text
+ml/eval/testset/hi_001.wav	hi	मदद भेजो अभी
+ml/eval/testset/hi_002.wav	hi	मैं ठीक हूँ
+ml/eval/testset/hi_003.wav	hi	पानी खत्म हो गया है जल्दी आओ
+ml/eval/testset/en_001.wav	en	send help immediately
+ml/eval/testset/en_002.wav	en	we are trapped near the bridge

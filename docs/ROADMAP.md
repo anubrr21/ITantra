@@ -22,18 +22,26 @@ was deliberately deferred until two physical phones are available. Treat Phase 2
       the UI switches between this pipeline and Phase 1's raw-audio path, which is
       untouched and still the default. Not yet tested on a real device (see status note
       below) — that's the only thing left before calling this phase verified.
-- [~] **Phase 3 — Accuracy upgrade: AI4Bharat IndicConformer (Hindi).** In progress,
-      blocked on one manual step. English dropped from this phase's scope — AI4Bharat
-      has no English model; see MODEL_NOTES.md. Real Python eval harness built at
-      `ml/stt/` and `ml/eval/` (loads the actual `indic-conformer-600m-multilingual`
-      model via `transformers`, transcribes real WAV files, computes real WER against
-      Vosk via `jiwer` — nothing mocked or hand-waved). **Blocked on:** the model is
-      gated on Hugging Face and needs a one-time manual login (see MODEL_NOTES.md for
-      exact steps) plus real recorded test audio (see `ml/eval/testset/README.md`) —
-      neither can be done by Claude. Once unblocked: run `ml/eval/wer_eval.py`, look at
-      the real WER/latency numbers, then decide whether to proceed to quantizing
-      (int8, via PyTorch ExecuTorch) and exporting for on-device use, or whether the
-      120M-param per-language NeMo checkpoint is worth its heavier setup cost instead.
+- [x] **Phase 3a — Accuracy benchmark & model decision: AI4Bharat IndicConformer
+      (Hindi). Complete.** English dropped from this phase's scope — AI4Bharat has no
+      English model; see MODEL_NOTES.md. Real Python eval harness at `ml/stt/` and
+      `ml/eval/` — loads the actual `indic-conformer-600m-multilingual` model via
+      `transformers`, transcribes real recorded WAV files (the user's own voice), scores
+      real WER against Vosk via `jiwer`, with a fix for a Devanagari Unicode
+      normalization quirk that was unfairly penalizing both engines. **Real result
+      (2026-09-17, n=3 Hindi utterances): IndicConformer CTC 0.0% WER vs Vosk 23.1%
+      WER.** Decision made: IndicConformer (CTC decoder) is the accuracy target for
+      Hindi. See MODEL_NOTES.md for the full numbers and caveats (small sample size).
+- [ ] **Phase 3b — On-device export for IndicConformer (Hindi).** Not started. The
+      gated model repo turned out to already ship pre-exported ONNX pieces
+      (`encoder.onnx` + external fp32 weights ~2.4GB, `ctc_decoder.onnx` 23MB) — likely
+      a better starting point than tracing/exporting from PyTorch ourselves. Work needed:
+      quantize the encoder (int8, maybe int4) via ONNX Runtime's own quantization
+      tooling, get it running through onnxruntime-android, wire it into the app as a new
+      `IndicConformerSttEngine` implementing the existing `SttEngine` interface (same
+      pattern as `VoskSttEngine`), and re-benchmark size/RAM/RTF on a real low/mid-range
+      phone (that last part needs Phase 5's device access anyway). Worth deciding later
+      whether to do this per-language now or batch it with Phase 6's other 8 languages.
 - [ ] **Phase 4 — TTS upgrade: AI4Bharat Indic-TTS.** Export FastPitch+HiFiGAN to ONNX
       Runtime Mobile, replace the system-TTS bring-up. Implement the spec's exact
       playback rules: normal messages play as a voice note, alert-type messages play at

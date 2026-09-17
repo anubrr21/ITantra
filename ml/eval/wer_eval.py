@@ -1,6 +1,7 @@
 import csv
 import sys
 import time
+import unicodedata
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "stt"))
@@ -22,6 +23,19 @@ INDIC_CONFORMER_LANGUAGES = {
     "mr", "ne", "or", "pa", "sa", "sat", "sd", "ta", "te", "ur",
 }
 
+# Chandrabindu (U+0901) and anusvara (U+0902) are two different Unicode code
+# points both commonly used to write the same nasal sound in spoken Hindi -
+# treating them as distinct would penalize a correct transcription just for
+# picking the other valid spelling of what was actually said.
+CHANDRABINDU = "ँ"
+ANUSVARA = "ं"
+
+
+def normalize_text(text: str) -> str:
+    text = unicodedata.normalize("NFC", text)
+    text = text.replace(CHANDRABINDU, ANUSVARA)
+    return text.strip()
+
 
 def read_manifest(manifest_path: Path):
     with open(manifest_path, newline="", encoding="utf-8") as f:
@@ -38,8 +52,13 @@ def main():
     vosk_models = {}
     indic_conformer_model = None
 
-    references_by_engine = {"vosk": [], "indic_conformer_ctc": []}
-    hypotheses_by_engine = {"vosk": [], "indic_conformer_ctc": []}
+    references_by_key = {}
+    hypotheses_by_key = {}
+
+    def record(engine: str, lang: str, reference: str, hypothesis: str):
+        key = (engine, lang)
+        references_by_key.setdefault(key, []).append(normalize_text(reference))
+        hypotheses_by_key.setdefault(key, []).append(normalize_text(hypothesis))
 
     for row in rows:
         wav_path = REPO_ROOT / row["wav_path"]
@@ -57,8 +76,7 @@ def main():
         vosk_text = transcribe_vosk(vosk_models[lang], str(wav_path)) if vosk_models[lang] else None
         vosk_latency = time.time() - started
         if vosk_text is not None:
-            references_by_engine["vosk"].append(reference)
-            hypotheses_by_engine["vosk"].append(vosk_text)
+            record("vosk", lang, reference, vosk_text)
             print(f"[vosk/{lang}] {wav_path.name} ({vosk_latency:.2f}s): {vosk_text!r}")
 
         if lang in INDIC_CONFORMER_LANGUAGES:
@@ -67,19 +85,16 @@ def main():
             started = time.time()
             ic_text = transcribe_indic_conformer(indic_conformer_model, str(wav_path), lang, "ctc")
             ic_latency = time.time() - started
-            references_by_engine["indic_conformer_ctc"].append(reference)
-            hypotheses_by_engine["indic_conformer_ctc"].append(ic_text)
+            record("indic_conformer_ctc", lang, reference, ic_text)
             print(f"[indic_conformer_ctc/{lang}] {wav_path.name} ({ic_latency:.2f}s): {ic_text!r}")
         else:
             print(f"[indic_conformer_ctc/{lang}] skipped - not an Indic-Conformer language")
 
     print()
-    print("WER summary")
-    for engine, refs in references_by_engine.items():
-        if not refs:
-            continue
-        wer = jiwer.wer(refs, hypotheses_by_engine[engine])
-        print(f"  {engine}: {wer:.3f} over {len(refs)} utterance(s)")
+    print("WER summary (per engine, per language - text normalized for Devanagari spelling variants)")
+    for (engine, lang), refs in sorted(references_by_key.items()):
+        wer = jiwer.wer(refs, hypotheses_by_key[(engine, lang)])
+        print(f"  {engine}/{lang}: {wer:.3f} over {len(refs)} utterance(s)")
 
 
 if __name__ == "__main__":

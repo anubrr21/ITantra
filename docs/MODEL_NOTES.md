@@ -68,6 +68,56 @@ for Phase 6 later, so it's not one-off work. Re-evaluate this trade-off once rea
 benchmark numbers exist — if CPU/mobile inference on the 600M model turns out too slow,
 the per-language NeMo path becomes worth the setup cost.
 
+**Real file-size finding (measured via the HF API, not estimated):** the repo already
+ships pre-exported ONNX pieces — `assets/encoder.onnx` (3.0MB graph), `assets/ctc_decoder.onnx`
+(23.1MB), `assets/rnnt_decoder.onnx` (40.7MB), and tiny (<1MB each) per-language RNNT
+joint-network heads (`assets/joint_post_net_hi.onnx`, etc.), plus a shared `vocab.json`
+and `language_masks.json` (a single shared vocabulary across all 22 languages, masked
+per-language at inference — much more storage-efficient than 22 separate vocabs). The
+encoder's actual weights are stored as ~2.4GB of external tensor files alongside the
+tiny `encoder.onnx` graph file (ONNX's external-data mechanism) — that number lines up
+almost exactly with 600M params × 4 bytes (fp32), confirming the model ships unquantized.
+
+**This matters for the on-device decision:** the encoder (the expensive, shared part)
+is ~2.4GB fp32 — much too large for a low/mid-range phone as-is. Quantization isn't
+optional polish here, it's required before this could ever run on-device (int8 →
+roughly 600-700MB, still heavy for a phone; int4 → roughly 300-350MB, more plausible
+but needs an accuracy check). By contrast, the 120M-param per-language NeMo checkpoint
+(`indicconformer_stt_hi_hybrid_ctc_rnnt_large`) is ~480MB fp32 → ~120MB int8, a much
+more mobile-realistic size despite its heavier NeMo-fork setup cost. **Re-open this
+trade-off once real WER numbers exist**: if the 600M model's accuracy gain over the
+120M one is small, the 120M model is probably the better final on-device pick despite
+being more annoying to set up; if the gap is large, quantizing the 600M encoder (int4)
+becomes worth the extra effort. The 600M model via `transformers` remains the right
+choice for the *Python-side accuracy research* either way — it's what's actually easy
+to run and compare against Vosk right now.
+
+**Real measured result (2026-09-17), n=3 Hindi + 2 English utterances, user's own
+recorded voice):**
+
+| Engine / Language | WER |
+|---|---|
+| IndicConformer (CTC decoder) / Hindi | 0.0% |
+| Vosk / Hindi | 23.1% |
+| Vosk / English | 33.3% |
+
+IndicConformer transcribed all 3 Hindi utterances exactly right, including one Vosk
+transcribed almost entirely wrong. Sample size is small — this is directional evidence,
+not a statistically bulletproof benchmark — but it matches what the research predicted
+(a modern 600M-param conformer beating an older Kaldi DNN-HMM model) and is decisive
+enough to act on. **Decision: IndicConformer (CTC decoder) is the target for Hindi**,
+pending the quantization work below to make it mobile-viable; Vosk remains the only
+option for English (no AI4Bharat equivalent exists). More real recordings across more
+speakers/conditions would strengthen this further and are welcome any time, but aren't
+blocking the decision.
+
+Fair comparison required one fix to the eval harness itself: Hindi text has two valid
+Unicode ways to write the same nasal sound (chandrabindu U+0901 vs anusvara U+0902) —
+without normalizing them to the same code point before scoring, a technically-correct
+transcription using the "other" spelling gets penalized as an error. `wer_eval.py` now
+normalizes both reference and hypothesis text before computing WER, and reports a
+separate WER per (engine, language) pair rather than one number that mixes languages.
+
 **Important caveat on language codes:** AI4Bharat's model card lists supported
 languages by name (Hindi, Bengali, Tamil, …), not by exact code string. `INDIC_CONFORMER_LANGUAGES`
 in `ml/eval/wer_eval.py` uses a best-effort ISO 639-1/639-3 guess (`hi`, `bn`, `ta`, …,
@@ -100,11 +150,18 @@ The problem statement requires open-source/TinyML frameworks and explicitly allo
 "TensorFlow Lite for Microcontrollers, PyTorch Mobile or similar."
 
 - **STT (conformer/wav2vec2-style transformer models):** TFLite conversion of these
-  architectures is notoriously painful (dynamic shapes, unsupported ops). PyTorch
-  Mobile / **ExecuTorch** (PyTorch's current on-device runtime, explicitly built for
-  exactly this — voice models with int4/int8 quantization via `torchao`) is the more
-  practical path and is explicitly permitted by the spec's "PyTorch Mobile or similar"
-  clause.
+  architectures is notoriously painful (dynamic shapes, unsupported ops). Originally
+  planned to use PyTorch Mobile / **ExecuTorch** for this — **superseded by a better
+  discovery**: `ai4bharat/indic-conformer-600m-multilingual`'s own repo already ships
+  pre-exported ONNX pieces (`assets/encoder.onnx`, `assets/ctc_decoder.onnx`,
+  `assets/rnnt_decoder.onnx`, per-language RNNT joint heads), confirmed by actually
+  listing the repo's files via the HF API. Starting from AI4Bharat's own ONNX export and
+  quantizing it with **ONNX Runtime's** quantization tooling is very likely less risky
+  than tracing/exporting the PyTorch model ourselves — ONNX Runtime Mobile (Android AAR)
+  becomes the single runtime for both STT and TTS instead of needing two different
+  mobile runtimes. Still worth keeping ExecuTorch in mind as a fallback if the ONNX path
+  hits a wall (e.g. an unsupported op in the RNNT decoder), and it remains explicitly
+  permitted by the spec's "PyTorch Mobile or similar" clause either way.
 - **TTS (FastPitch+HiFiGAN):** these convert cleanly to **ONNX**; **ONNX Runtime
   Mobile** (open-source, Android AAR available) is the practical target. TFLite is a
   fallback if ONNX Runtime Mobile's footprint turns out too large for the "low RAM/flash"

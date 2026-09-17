@@ -1,3 +1,4 @@
+import soundfile as sf
 import torch
 import torchaudio
 from transformers import AutoModel
@@ -10,7 +11,8 @@ def load_model():
 
 
 def load_wav_16k_mono(wav_path: str) -> torch.Tensor:
-    wav, sr = torchaudio.load(wav_path)
+    data, sr = sf.read(wav_path, dtype="float32", always_2d=True)
+    wav = torch.from_numpy(data.T)
     wav = torch.mean(wav, dim=0, keepdim=True)
     target_sample_rate = 16000
     if sr != target_sample_rate:

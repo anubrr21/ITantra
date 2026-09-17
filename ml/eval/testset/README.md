@@ -26,3 +26,10 @@ ml/.venv/Scripts/python.exe ml/eval/wer_eval.py
 The more utterances (different speakers, background noise, sentence lengths) the more
 this WER number actually means for the "accuracy 40%" weighting in the problem
 statement's evaluation criteria — a single clean sample is a smoke test, not a benchmark.
+
+**`.wav` files in this folder are git-ignored on purpose** — they're recordings of real
+people's voices, and this repo is public. `manifest.tsv` (just text) stays committed as
+a record of what was tested and the real results obtained (see docs/MODEL_NOTES.md), but
+the actual audio stays local-only. Anyone re-running the eval on a fresh clone needs to
+re-record their own samples matching the filenames already listed in `manifest.tsv`, or
+just add new rows for their own recordings.
