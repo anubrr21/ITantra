@@ -47,15 +47,22 @@ was deliberately deferred until two physical phones are available. Treat Phase 2
       needed at inference** (`ml/stt/onnx_export/pure_onnx_pipeline.py`) and reproduces
       the exact same transcriptions as the official model on all 3 real Hindi
       recordings. This is the verified blueprint for the Android port.
-      **Still needed:** quantize `encoder.onnx` (currently ~2.4GB fp32 — the whole
-      reason this step exists; int8 first, evaluate accuracy loss, consider the 120M
-      per-language NeMo model as a fallback if quantized accuracy or size still isn't
-      mobile-viable), get `onnxruntime-android` into the Gradle build, port the
-      preprocessing/decode logic above to Kotlin, wire it into the app as a new
-      `IndicConformerSttEngine` (same `SttEngine` interface `VoskSttEngine` already
-      implements), and re-benchmark size/RAM/RTF on a real low/mid-range phone (needs
-      Phase 5's device access anyway). Worth deciding later whether to do the remaining
-      8 languages (Phase 6) through this same exported pipeline in a batch.
+      **Quantized and wired into the app.** `encoder.onnx` int8-quantized (MatMul ops
+      only — quantizing Conv too hit a `ConvInteger` op this machine's ONNX Runtime CPU
+      provider can't run at all): 2.4GB → 880MB, re-verified against the same 3 real
+      Hindi recordings at only 7.7% WER (still far ahead of Vosk's 23.1%, and almost all
+      of that is one word's diacritic spelling variant, not a real error). `onnxruntime-android:1.27.0`
+      added to Gradle; `IndicConformerSttEngine.kt` + `IndicConformerAssetProvisioner.kt`
+      port the exact verified Python pipeline (preprocessor → encoder → CTC decoder →
+      language-mask + greedy-CTC-collapse decode) to Kotlin, and `RadioService` now
+      routes Hindi to it (falling back to Vosk automatically if the ~900MB of ONNX
+      assets aren't present). **Still needed:** this Kotlin code has never been
+      compiled or run — no Android SDK on the research machine, and real-device testing
+      is deliberately deferred until Phase 3 is fully wired up. 880MB is also still
+      heavy for the spec's low/mid-range phone target; worth revisiting in Phase 7 with
+      real device RAM numbers, or falling back to the 120M per-language NeMo checkpoint
+      if it proves impractical. Worth deciding later whether to do the remaining 8
+      languages (Phase 6) through this same exported pipeline in a batch.
 - [ ] **Phase 4 — TTS upgrade: AI4Bharat Indic-TTS.** Export FastPitch+HiFiGAN to ONNX
       Runtime Mobile, replace the system-TTS bring-up. Implement the spec's exact
       playback rules: normal messages play as a voice note, alert-type messages play at

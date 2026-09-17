@@ -22,3 +22,11 @@ tens of MB of binary data per language and don't belong in the repo. On a fresh 
 Without these, the app still runs fine: "Voice → text" mode just won't produce any
 outgoing text (TTS playback still works, since Android's built-in TTS needs no model
 files). See docs/ROADMAP.md Phase 2.
+
+`app/src/main/assets/indic_conformer/` holds the Phase 3b on-device Hindi STT pipeline:
+`preprocessor.onnx`, `encoder.onnx` (int8-quantized, ~880MB — by far the largest asset
+in this app), `ctc_decoder.onnx`, `vocab.json`, `language_masks.json`. Also git-ignored
+(GitHub hard-rejects files over 100MB anyway). Regenerate with the scripts under
+`ml/stt/onnx_export/` — see that folder's README and `docs/MODEL_NOTES.md`. Without
+these files, `IndicConformerSttEngine` construction fails and `RadioService` falls back
+to Vosk for Hindi automatically.

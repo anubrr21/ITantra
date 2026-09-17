@@ -98,8 +98,7 @@ problem statement).
   `org.vosk.Recognizer` only while VAD says speech is active, then calls
   `finalResult()` on the pause edge and recreates the recognizer for the next utterance.
   It needs an unpacked Vosk model directory to construct (see
-  `app/src/main/assets/README.md` — **the actual model files aren't bundled yet**,
-  fetching them is a separate, explicit step because they're tens of MB each).
+  `app/src/main/assets/README.md` for how the model files are provisioned).
 - **TTS**: `AndroidSystemTtsEngine` wraps the OS's built-in `TextToSpeech` — no model
   files needed, works immediately. This is the Phase 2 bring-up baseline Phase 4 will
   replace with the on-device AI4Bharat Indic-TTS model.
@@ -111,3 +110,21 @@ problem statement).
   `RadioFrame`'s 1-byte type tag, added in `RadioService` above the transport layer — the
   raw-audio walkie-talkie still behaves identically to a user, it's picked via a new
   "Voice → text" toggle that defaults off (`TransmissionMode.RAW_AUDIO`).
+
+## Phase 3b: on-device IndicConformer for Hindi
+
+`IndicConformerSttEngine` implements the same `SttEngine` interface as `VoskSttEngine`
+but is a straight Kotlin port of the pure-ONNX-Runtime pipeline verified in
+`ml/stt/onnx_export/pure_onnx_pipeline.py` — three chained ONNX graphs
+(`preprocessor.onnx` → `encoder.onnx` → `ctc_decoder.onnx`, all loaded via
+`onnxruntime-android`) plus a greedy-CTC-collapse decode using AI4Bharat's own
+language-masking scheme. `IndicConformerAssetProvisioner` copies the ~900MB of ONNX
+assets from `app/src/main/assets/indic_conformer/` to internal storage once (ONNX
+Runtime loads from a file path, not a byte array, since the encoder alone is 880MB).
+
+`RadioService.setLanguage()` now tries `IndicConformerSttEngine` first for Hindi
+(falling back to Vosk automatically if construction fails — e.g. the ONNX assets
+aren't present) and still uses Vosk directly for every other language, since
+AI4Bharat has no English model. Model construction runs on `Dispatchers.IO` inside
+`serviceScope`, not the calling thread — copying ~900MB and loading an 880MB ONNX
+session the first time a language is selected would otherwise freeze the UI.

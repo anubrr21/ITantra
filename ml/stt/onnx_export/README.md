@@ -30,7 +30,23 @@ not just in this Python research harness. Run in order:
    needed. Verified to reproduce the exact same transcriptions as the official model on
    real recorded Hindi speech — this is the actual blueprint to port to Kotlin.
 
-**Not done yet:** `encoder.onnx`'s real weights are ~2.4GB fp32 (external ONNX data
-files, not in this folder — see `docs/MODEL_NOTES.md`) — far too large for a phone.
-Quantizing that down to something mobile-viable (int8 first) is the next step, followed
-by the actual Android/Kotlin port using `onnxruntime-android`.
+6. **`quantize_encoder.py`** — dynamic int8 quantization of `encoder.onnx`, restricted
+   to `MatMul` ops only (`op_types_to_quantize=["MatMul"]`). Quantizing `Conv` too was
+   tried first and produced a smaller file (652MB vs 880MB), but it emits `ConvInteger`
+   nodes that this machine's ONNX Runtime CPU provider can't run at all
+   (`NOT_IMPLEMENTED` at session creation) — MatMul-only avoids that at the cost of
+   leaving the (smaller, but not negligible) conv modules in fp32. Verified afterward
+   against the same 3 real Hindi recordings: WER only rose from 0.0% to 7.7%, and that's
+   almost entirely one word getting a diacritic variant (ख़त्म vs खत्म — same meaning),
+   not a real recognition failure. Output: `ml/stt/exported/encoder.int8.onnx`, 880MB.
+
+**Current state:** all 5 files this pipeline produces/needs
+(`preprocessor.onnx`, `encoder.int8.onnx` renamed to `encoder.onnx`, `ctc_decoder.onnx`,
+`vocab.json`, `language_masks.json`) are copied into
+`app/src/main/assets/indic_conformer/` and consumed by
+`IndicConformerSttEngine.kt`/`IndicConformerAssetProvisioner.kt`, which reimplement this
+exact pipeline (including the language-masking + greedy-CTC-collapse decode) in Kotlin
+using `onnxruntime-android`. **880MB is still heavy** for the spec's low/mid-range phone
+target — worth revisiting in Phase 7 (real device RAM numbers) or by falling back to the
+120M per-language NeMo checkpoint if it proves impractical. Not yet tested on a device —
+testing is deferred until Phase 3 is fully wired up, per the project's own plan.

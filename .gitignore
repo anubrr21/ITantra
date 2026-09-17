@@ -31,3 +31,7 @@ app/src/main/assets/model-hi/
 
 # Personal voice recordings used for local WER testing - never commit these
 ml/eval/testset/*.wav
+
+# IndicConformer ONNX assets - hundreds of MB, GitHub hard-rejects anything
+# over 100MB anyway. See docs/MODEL_NOTES.md for how to regenerate these.
+app/src/main/assets/indic_conformer/

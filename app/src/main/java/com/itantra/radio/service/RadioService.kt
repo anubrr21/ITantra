@@ -21,6 +21,7 @@ import com.itantra.radio.network.TransportPeer
 import com.itantra.radio.network.WifiDirectTransport
 import com.itantra.radio.ptt.PttController
 import com.itantra.radio.ptt.PttMode
+import com.itantra.radio.stt.IndicConformerSttEngine
 import com.itantra.radio.stt.SttEngine
 import com.itantra.radio.stt.VoskModelProvisioner
 import com.itantra.radio.stt.VoskSttEngine
@@ -140,17 +141,29 @@ class RadioService : Service() {
         ttsEngine?.stop()
         ttsEngine = AndroidSystemTtsEngine(applicationContext, language.ttsLocale, language.code)
 
-        VoskModelProvisioner.unpack(
-            applicationContext,
-            language.voskAssetFolder,
-            onReady = { model ->
-                val engine = VoskSttEngine(model, language.code)
-                engine.setOnResult { text -> onRecognizedText(text) }
-                engine.start()
-                sttEngine = engine
-            },
-            onError = { },
-        )
+        serviceScope.launch(Dispatchers.IO) {
+            if (language == SupportedLanguage.HINDI) {
+                val engine = runCatching { IndicConformerSttEngine(applicationContext, language.code) }.getOrNull()
+                if (engine != null) {
+                    engine.setOnResult { text -> onRecognizedText(text) }
+                    engine.start()
+                    sttEngine = engine
+                    return@launch
+                }
+            }
+
+            VoskModelProvisioner.unpack(
+                applicationContext,
+                language.voskAssetFolder,
+                onReady = { model ->
+                    val engine = VoskSttEngine(model, language.code)
+                    engine.setOnResult { text -> onRecognizedText(text) }
+                    engine.start()
+                    sttEngine = engine
+                },
+                onError = { },
+            )
+        }
     }
 
     private fun applyCaptureState() {

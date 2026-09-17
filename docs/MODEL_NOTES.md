@@ -84,13 +84,23 @@ optional polish here, it's required before this could ever run on-device (int8 �
 roughly 600-700MB, still heavy for a phone; int4 → roughly 300-350MB, more plausible
 but needs an accuracy check). By contrast, the 120M-param per-language NeMo checkpoint
 (`indicconformer_stt_hi_hybrid_ctc_rnnt_large`) is ~480MB fp32 → ~120MB int8, a much
-more mobile-realistic size despite its heavier NeMo-fork setup cost. **Re-open this
-trade-off once real WER numbers exist**: if the 600M model's accuracy gain over the
-120M one is small, the 120M model is probably the better final on-device pick despite
-being more annoying to set up; if the gap is large, quantizing the 600M encoder (int4)
-becomes worth the extra effort. The 600M model via `transformers` remains the right
-choice for the *Python-side accuracy research* either way — it's what's actually easy
-to run and compare against Vosk right now.
+more mobile-realistic size despite its heavier NeMo-fork setup cost. The 600M model via
+`transformers` remains the right choice for the *Python-side accuracy research* either
+way — it's what's actually easy to run and compare against Vosk.
+
+**Update (2026-09-17): actually quantized and measured, not just estimated.** Dynamic
+int8 quantization restricted to `MatMul` ops (quantizing `Conv` too produced a smaller
+file but emitted `ConvInteger` nodes this machine's ONNX Runtime CPU provider can't run
+at all — `NOT_IMPLEMENTED` at session creation) got the encoder from 2.4GB fp32 to
+**880MB**, re-verified at only 7.7% WER (barely moved from 0.0%, and that's one word's
+diacritic spelling variant, not a real error) against the same 3 real Hindi recordings.
+880MB is still a lot heavier than the 120M NeMo model's projected ~120MB — **worth
+revisiting once real device RAM numbers exist (Phase 7)**, especially if a genuinely
+low-end test device can't comfortably hold an 880MB model in memory alongside the rest
+of the app. Next quantization step to try if that happens: figure out why `ConvInteger`
+isn't implemented on this CPU provider (a newer onnxruntime version? a different
+quantization approach for Conv, e.g. `QDQ` format instead of `QOperator`?) to reclaim
+the extra ~230MB Conv quantization would have saved, or fall back to the 120M model.
 
 **Real measured result (2026-09-17), n=3 Hindi + 2 English utterances, user's own
 recorded voice):**
@@ -149,19 +159,25 @@ quantization.
 The problem statement requires open-source/TinyML frameworks and explicitly allows
 "TensorFlow Lite for Microcontrollers, PyTorch Mobile or similar."
 
-- **STT (conformer/wav2vec2-style transformer models):** TFLite conversion of these
-  architectures is notoriously painful (dynamic shapes, unsupported ops). Originally
-  planned to use PyTorch Mobile / **ExecuTorch** for this — **superseded by a better
-  discovery**: `ai4bharat/indic-conformer-600m-multilingual`'s own repo already ships
-  pre-exported ONNX pieces (`assets/encoder.onnx`, `assets/ctc_decoder.onnx`,
-  `assets/rnnt_decoder.onnx`, per-language RNNT joint heads), confirmed by actually
-  listing the repo's files via the HF API. Starting from AI4Bharat's own ONNX export and
-  quantizing it with **ONNX Runtime's** quantization tooling is very likely less risky
-  than tracing/exporting the PyTorch model ourselves — ONNX Runtime Mobile (Android AAR)
-  becomes the single runtime for both STT and TTS instead of needing two different
-  mobile runtimes. Still worth keeping ExecuTorch in mind as a fallback if the ONNX path
-  hits a wall (e.g. an unsupported op in the RNNT decoder), and it remains explicitly
-  permitted by the spec's "PyTorch Mobile or similar" clause either way.
+- **STT (conformer/wav2vec2-style transformer models): done for Hindi CTC, via ONNX
+  Runtime, not ExecuTorch as originally planned.** TFLite conversion of these
+  architectures is notoriously painful (dynamic shapes, unsupported ops), and
+  PyTorch Mobile/ExecuTorch would have needed tracing/exporting the PyTorch model
+  ourselves. Better path found: `ai4bharat/indic-conformer-600m-multilingual`'s own
+  repo already ships pre-exported ONNX pieces (`assets/encoder.onnx`,
+  `assets/ctc_decoder.onnx`, `assets/rnnt_decoder.onnx`, per-language RNNT joint heads).
+  The one piece AI4Bharat didn't export (`preprocessor.ts`, the mel-spectrogram
+  frontend — its `torch.stft(return_complex=True)` isn't ONNX-exportable) was
+  faithfully reimplemented and exported ourselves (see `ml/stt/onnx_export/`). The full
+  chain now runs through `onnxruntime-android` on the Kotlin side
+  (`IndicConformerSttEngine`) — ONNX Runtime Mobile ended up being the single runtime
+  for STT, and is the leading candidate for TTS too (below), instead of needing two
+  different mobile runtimes. ExecuTorch remains a fallback if a future language/model
+  hits an ONNX export wall, and stays explicitly permitted by the spec's "PyTorch
+  Mobile or similar" clause either way. RNNT decoding was not pursued for on-device use
+  (CTC-only, per the original plan) — RNNT's autoregressive per-frame decoder loop
+  would be far more complex to port and is unlikely to be worth it given CTC already
+  hits 7.7% WER quantized.
 - **TTS (FastPitch+HiFiGAN):** these convert cleanly to **ONNX**; **ONNX Runtime
   Mobile** (open-source, Android AAR available) is the practical target. TFLite is a
   fallback if ONNX Runtime Mobile's footprint turns out too large for the "low RAM/flash"

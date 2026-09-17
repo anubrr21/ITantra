@@ -11,8 +11,6 @@ android {
 
     defaultConfig {
         applicationId = "com.itantra.radio"
-        // minSdk 24: covers low/mid-range devices still in the field, per the
-        // problem statement's "must run smoothly on low and mid range phones".
         minSdk = 24
         targetSdk = 35
         versionCode = 1
@@ -39,6 +37,10 @@ android {
 
     buildFeatures {
         compose = true
+    }
+
+    androidResources {
+        noCompress += "onnx"
     }
 
     composeOptions {
@@ -73,6 +75,7 @@ dependencies {
 
     implementation("com.alphacephei:vosk-android:0.3.75")
     implementation("com.github.gkonovalov.android-vad:webrtc:2.0.10")
+    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.27.0")
 
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
