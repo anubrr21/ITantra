@@ -19,6 +19,7 @@ app/release/
 ml/**/checkpoints/
 ml/**/*.pt
 ml/**/*.onnx
+ml/**/*.onnx.data
 ml/**/*.pte
 ml/**/*.tflite
 ml/**/data/

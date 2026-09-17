@@ -187,10 +187,23 @@ checkpoints are plain GitHub Release downloads, no HF login needed. Real finding
   synthesized speech is genuinely correct and intelligible, not just "it ran without
   crashing."
 
-**Not done yet:** ONNX export (no pre-exported ONNX ships with this model, unlike the
-STT one — this will need to be done from scratch, likely harder than the STT
-preprocessor export since FastPitch+HiFiGAN together are a bigger, more complex
-computation graph), quantization, and the Kotlin/`onnxruntime-android` port.
+**Update (2026-09-18): ONNX export done and verified, see `ml/tts/onnx_export/`.**
+Real, non-obvious problem hit and fixed: FastPitch's self-attention
+(`nn.MultiheadAttention`) exported "successfully" with the legacy TorchScript-based
+exporter but silently baked in the traced sequence length, producing a runtime crash
+on any other input length — a genuine correctness bug, not just a warning, and one
+that a single-length smoke test would never catch (which is exactly why
+`verify_fastpitch_onnx.py` tests three very different lengths, not one). Fixed by
+switching to the newer `torch.export`-based exporter (`dynamo=True`), whose stricter
+symbolic-shape tracing also surfaced a second, unrelated blocker — a defensive
+`raise RuntimeError` guard in the positional encoding for sequences over 5000 frames —
+patched out via a targeted monkeypatch since it can't fire for any realistic input.
+HiFiGAN (pure feedforward convolutions, no attention) exported cleanly on the first
+try. Real sizes: FastPitch 637MB→217MB ONNX, HiFiGAN 1016MB→56MB ONNX — combined
+~273MB before quantization, already in the same ballpark as the STT model's *final
+quantized* size. Full pipeline re-verified via the same round-trip-through-STT
+technique used for the initial bring-up. **Still not done:** quantization and the
+Kotlin/`onnxruntime-android` port.
 
 ## On-device runtime
 
