@@ -32,16 +32,30 @@ was deliberately deferred until two physical phones are available. Treat Phase 2
       (2026-09-17, n=3 Hindi utterances): IndicConformer CTC 0.0% WER vs Vosk 23.1%
       WER.** Decision made: IndicConformer (CTC decoder) is the accuracy target for
       Hindi. See MODEL_NOTES.md for the full numbers and caveats (small sample size).
-- [ ] **Phase 3b — On-device export for IndicConformer (Hindi).** Not started. The
-      gated model repo turned out to already ship pre-exported ONNX pieces
-      (`encoder.onnx` + external fp32 weights ~2.4GB, `ctc_decoder.onnx` 23MB) — likely
-      a better starting point than tracing/exporting from PyTorch ourselves. Work needed:
-      quantize the encoder (int8, maybe int4) via ONNX Runtime's own quantization
-      tooling, get it running through onnxruntime-android, wire it into the app as a new
-      `IndicConformerSttEngine` implementing the existing `SttEngine` interface (same
-      pattern as `VoskSttEngine`), and re-benchmark size/RAM/RTF on a real low/mid-range
-      phone (that last part needs Phase 5's device access anyway). Worth deciding later
-      whether to do this per-language now or batch it with Phase 6's other 8 languages.
+- [~] **Phase 3b — On-device export for IndicConformer (Hindi).** In progress, one
+      real milestone down. `assets/preprocessor.ts` (the mel-spectrogram frontend)
+      couldn't be exported to ONNX directly — `torch.stft`'s complex-tensor output
+      isn't supported by ONNX's STFT op — so it was faithfully reimplemented in eager
+      PyTorch using `return_complex=False` (mathematically identical, ONNX-exportable)
+      and numerically verified to match the original to ~1e-6 (see
+      `ml/stt/onnx_export/verify_preprocessor.py`), then exported and re-verified against
+      ONNX Runtime to ~5e-5 (`verify_preprocessor_onnx.py`) — both are floating-point
+      noise, not real discrepancies. The full chain (this new `preprocessor.onnx` →
+      AI4Bharat's own pre-exported `encoder.onnx` → `ctc_decoder.onnx`, decoded with the
+      exact language-masking + greedy-CTC-collapse algorithm read directly out of
+      AI4Bharat's reference `model_onnx.py`) now runs in **pure ONNX Runtime, no PyTorch
+      needed at inference** (`ml/stt/onnx_export/pure_onnx_pipeline.py`) and reproduces
+      the exact same transcriptions as the official model on all 3 real Hindi
+      recordings. This is the verified blueprint for the Android port.
+      **Still needed:** quantize `encoder.onnx` (currently ~2.4GB fp32 — the whole
+      reason this step exists; int8 first, evaluate accuracy loss, consider the 120M
+      per-language NeMo model as a fallback if quantized accuracy or size still isn't
+      mobile-viable), get `onnxruntime-android` into the Gradle build, port the
+      preprocessing/decode logic above to Kotlin, wire it into the app as a new
+      `IndicConformerSttEngine` (same `SttEngine` interface `VoskSttEngine` already
+      implements), and re-benchmark size/RAM/RTF on a real low/mid-range phone (needs
+      Phase 5's device access anyway). Worth deciding later whether to do the remaining
+      8 languages (Phase 6) through this same exported pipeline in a batch.
 - [ ] **Phase 4 — TTS upgrade: AI4Bharat Indic-TTS.** Export FastPitch+HiFiGAN to ONNX
       Runtime Mobile, replace the system-TTS bring-up. Implement the spec's exact
       playback rules: normal messages play as a voice note, alert-type messages play at
