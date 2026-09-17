@@ -73,10 +73,21 @@ below for the details and why nobody should assume these are guesses.
       real device RAM numbers, or falling back to the 120M per-language NeMo checkpoint
       if it proves impractical. Worth deciding later whether to do the remaining 8
       languages (Phase 6) through this same exported pipeline in a batch.
-- [ ] **Phase 4 — TTS upgrade: AI4Bharat Indic-TTS.** Export FastPitch+HiFiGAN to ONNX
-      Runtime Mobile, replace the system-TTS bring-up. Implement the spec's exact
-      playback rules: normal messages play as a voice note, alert-type messages play at
-      max volume and can't be interrupted.
+- [~] **Phase 4 — TTS upgrade: AI4Bharat Indic-TTS.** In progress. Real bring-up done:
+      downloaded the Hindi FastPitch+HiFiGAN checkpoint (not gated, unlike STT — plain
+      GitHub Release download), got it running via the `coqui-tts` package in its own
+      venv (`ml/.venv-tts` — kept separate from the STT venv to avoid a `transformers`
+      version conflict), fixed a real bug (a hardcoded path in the checkpoint's
+      `config.json` from AI4Bharat's own directory layout), and validated output
+      quality for real: synthesized a Hindi sentence, fed it back through the verified
+      Phase 3b STT, got back the exact same words. See MODEL_NOTES.md for details and
+      `ml/tts/hindi_tts_sample.wav` for the actual audio. **Still needed:** ONNX export
+      (no pre-exported ONNX ships with this model, unlike the STT one — likely a bigger
+      lift than the STT preprocessor export), quantization, the Kotlin/
+      `onnxruntime-android` port as `IndicTtsEngine`, and the spec's exact playback
+      rules (normal messages as a voice note, alert-type messages at max volume and
+      non-interruptible — not implemented at all yet, current `AndroidSystemTtsEngine`
+      bring-up doesn't distinguish them).
 - [ ] **Phase 5 — Full loop validation.** Two phones, one in STT mode / one in TTS mode,
       measure round-trip latency exactly as the spec's evaluation method describes.
 - [ ] **Phase 6 — Multilingual expansion.** Repeat Phase 3/4's benchmark-and-pick pattern

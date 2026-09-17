@@ -23,6 +23,7 @@ ml/**/*.pte
 ml/**/*.tflite
 ml/**/data/
 ml/.venv/
+ml/.venv-tts/
 __pycache__/
 *.pyc
 

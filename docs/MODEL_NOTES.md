@@ -154,6 +154,44 @@ English"), not an oversight.
 efficiency requirement; Parler-TTS/IndicF5 evaluated only if quality falls short after
 quantization.
 
+**Phase 4 bring-up, real and verified (2026-09-18):** Not gated (unlike the STT model) —
+checkpoints are plain GitHub Release downloads, no HF login needed. Real findings:
+- Per-language checkpoint zip is **~1.42GB** (`hi.zip`), unzipping to a 637MB FastPitch
+  `best_model.pth` + a 1016MB HiFiGAN `best_model.pth` — both far larger than these
+  architectures' actual inference weights (tens of MB each), meaning these are raw
+  training checkpoints (optimizer state, discriminator weights) not inference-stripped
+  exports. Real ONNX export sizes should end up much smaller once traced.
+- Sample rate is **22050 Hz**, not the 16kHz used throughout the STT pipeline —
+  resampling will be needed wherever TTS output feeds into anything expecting 16kHz
+  (or just play it at its native rate on Android, which is simpler and fine for output).
+- Model is multi-speaker (`female`=0, `male`=1) — `speaker` must be specified at
+  synthesis time.
+- One real bug hit and fixed: `config.json` hardcodes an absolute-looking path
+  (`models/v1/hi/fastpitch/speakers.pth`) left over from AI4Bharat's own training
+  directory layout, which the `Synthesizer` reads directly instead of respecting the
+  `tts_speakers_file` constructor argument — worked around by patching the path in
+  the config file itself (see `ml/tts/synthesize.py`'s surrounding notes).
+- Uses the community-maintained `coqui-tts` PyPI fork (prebuilt Windows wheels — the
+  original `TTS` package needs a C++ compiler to build from source on Windows, which
+  this machine doesn't have). Needed its own **separate Python venv**
+  (`ml/.venv-tts`) — `coqui-tts` declares only `transformers>=4.57` with no upper
+  bound, so it pulls in a `transformers` version too new for its own bundled (unused)
+  XTTS code; pinned to `transformers>=4.57,<5` to fix, kept isolated from the STT
+  venv's newer `transformers` rather than downgrading that one and risking breaking
+  Phase 3 work.
+- **Real quality validation:** synthesized "नमस्ते, यह एक परीक्षण है" (see
+  `ml/tts/hindi_tts_sample.wav`), resampled it to 16kHz, and fed it back through the
+  already-verified Phase 3b IndicConformer STT pipeline. Transcribed back as
+  "नमस्ते यह एक परीक्षण है" — word-for-word identical (the only difference is the
+  comma, which CTC-based ASR correctly doesn't vocalize). This is real evidence the
+  synthesized speech is genuinely correct and intelligible, not just "it ran without
+  crashing."
+
+**Not done yet:** ONNX export (no pre-exported ONNX ships with this model, unlike the
+STT one — this will need to be done from scratch, likely harder than the STT
+preprocessor export since FastPitch+HiFiGAN together are a bigger, more complex
+computation graph), quantization, and the Kotlin/`onnxruntime-android` port.
+
 ## On-device runtime
 
 The problem statement requires open-source/TinyML frameworks and explicitly allows
