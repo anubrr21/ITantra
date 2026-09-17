@@ -4,9 +4,13 @@ Kept up to date as phases complete. No fixed deadline — phases are ordered to 
 the hardest parts (multilingual accuracy, on-device performance) early rather than
 leaving them to the end.
 
-**Status:** Phases 0-3b are coded but none have been run on a real device yet — testing
-was deliberately deferred until two physical phones are available. Treat everything
-through Phase 3b as "should work" rather than "verified" until that happens.
+**Status:** As of 2026-09-17, Phases 0-3b **compile and package into a real, complete
+debug APK** (`./gradlew :app:assembleDebug` succeeds — verified once Android Studio and
+the SDK finally landed on the research machine) — this is a step up from "should work"
+to "actually builds," but still short of "verified," since none of it has run on a real
+device yet. That's still deliberately deferred until two physical phones are available.
+See "Build environment notes" below for what it took to get a working build (several
+real dependency-version fixes, not just SDK installation).
 
 - [x] **Phase 0 — Scaffold.** Repo, Android project skeleton, Gradle config, docs.
 - [x] **Phase 1 — Transport & PTT skeleton.** WiFi Direct + Bluetooth Classic behind a
@@ -90,3 +94,43 @@ stays on Vosk) before being repeated 8 more times (Phase 6), instead of discover
 fundamental problem after building all 10 language pipelines.
 Raw-audio transport (Phase 1) ships first because it's fully testable without any model
 work and de-risks the networking/PTT layer independently.
+
+## Build environment notes (2026-09-17)
+
+Android Studio (Quail 4, 2026.1.4) plus its bundled SDK finally landed on the research
+machine, and getting an actual build green took more than just installing them — real,
+non-obvious fixes, recorded here so nobody "fixes" them back into a broken state:
+
+- **Gradle itself needs JDK ≤22, not Android Studio's bundled JDK 25.** Gradle 8.9
+  fails against JBR 25 with a cryptic error (`What went wrong: 25.0.3` — no message,
+  just the JDK version). Use a separate JDK (this machine has one at
+  `C:\Program Files\Java\jdk-22`) as `JAVA_HOME` when running Gradle from the command
+  line. Android Studio itself handles this internally when it manages Gradle, so this
+  mostly matters for command-line builds.
+- **Kotlin bumped 1.9.24 → 2.2.0** (and KSP correspondingly to `2.2.0-2.0.2`, and the
+  Compose Compiler moved from the old `composeOptions.kotlinCompilerExtensionVersion`
+  mechanism to the new `org.jetbrains.kotlin.plugin.compose` Gradle plugin, required by
+  Kotlin 2.0+). Root cause: some dependency in this project's graph is compiled against
+  kotlin-stdlib 2.2.0, which a 1.9.24 compiler can't read at all.
+- **`ksp.useKSP2=false` in `gradle.properties`, intentionally.** KSP2 (the default with
+  newer KSP versions) crashes processing Hilt's generated code with a Dagger
+  `SuperficialValidation` `UnexpectedException` on `DefaultViewModelFactories
+  .ActivityModule.viewModelKeys()` — a known, still-open class of Dagger/KSP2
+  compatibility bug as of this Hilt version. Forcing the older KSP1 implementation
+  avoids it entirely. Revisit removing this once Dagger/Hilt's KSP2 support matures.
+- **Hilt bumped 2.51.1 → 2.56.2.** 2.51.1's bundled `kotlinx-metadata-jvm` only reads
+  Kotlin metadata up to version 2.1.0; anything compiled with Kotlin 2.2.0 (see above)
+  made `hiltJavaCompileDebug` fail with `IllegalArgumentException: Provided Metadata
+  instance has version 2.2.0, while maximum supported version is 2.1.0`. 2.56.2 fixed it.
+- **Two real bugs found in `WifiDirectTransport.kt`** (not environment issues — actual
+  mistakes): `override fun onSuccess() = Log.d(...)` infers `Int` as the return type
+  (since `Log.d()` returns one), which doesn't satisfy `WifiP2pManager.ActionListener
+  .onSuccess(): Unit`. Fixed by using a block body instead of an expression body.
+- The resulting debug APK is **~1.16GB**, almost entirely the bundled IndicConformer
+  (~900MB) and Vosk (~150MB) model assets — a concrete number for the Phase 7
+  efficiency-pass discussion about whether the 880MB quantized encoder is really
+  viable for the spec's low-end-phone target.
+
+None of this has been run on an actual device yet — it compiles and packages, which is
+a real, meaningfully verified milestone, but "builds" and "works" are still two
+different claims.

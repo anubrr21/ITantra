@@ -84,7 +84,7 @@ class WifiDirectTransport(
         register()
         _state.value = TransportState.Discovering
         manager.discoverPeers(channel, object : WifiP2pManager.ActionListener {
-            override fun onSuccess() = Log.d(TAG, "Peer discovery started")
+            override fun onSuccess() { Log.d(TAG, "Peer discovery started") }
             override fun onFailure(reason: Int) {
                 _state.value = TransportState.Failed("WiFi Direct discovery failed: $reason")
             }
@@ -107,7 +107,7 @@ class WifiDirectTransport(
         val config = WifiP2pConfig().apply { deviceAddress = device.deviceAddress }
         _state.value = TransportState.Connecting
         manager.connect(channel, config, object : WifiP2pManager.ActionListener {
-            override fun onSuccess() = Log.d(TAG, "Connect requested")
+            override fun onSuccess() { Log.d(TAG, "Connect requested") }
             override fun onFailure(reason: Int) {
                 _state.value = TransportState.Failed("WiFi Direct connect failed: $reason")
             }
