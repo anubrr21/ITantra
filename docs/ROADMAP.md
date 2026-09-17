@@ -4,9 +4,9 @@ Kept up to date as phases complete. No fixed deadline — phases are ordered to 
 the hardest parts (multilingual accuracy, on-device performance) early rather than
 leaving them to the end.
 
-**Status:** Phases 0-2 are coded but none have been run on a real device yet — testing
-was deliberately deferred until two physical phones are available. Treat Phase 2 as
-"should work" rather than "verified" until that happens.
+**Status:** Phases 0-3b are coded but none have been run on a real device yet — testing
+was deliberately deferred until two physical phones are available. Treat everything
+through Phase 3b as "should work" rather than "verified" until that happens.
 
 - [x] **Phase 0 — Scaffold.** Repo, Android project skeleton, Gradle config, docs.
 - [x] **Phase 1 — Transport & PTT skeleton.** WiFi Direct + Bluetooth Classic behind a
@@ -32,8 +32,8 @@ was deliberately deferred until two physical phones are available. Treat Phase 2
       (2026-09-17, n=3 Hindi utterances): IndicConformer CTC 0.0% WER vs Vosk 23.1%
       WER.** Decision made: IndicConformer (CTC decoder) is the accuracy target for
       Hindi. See MODEL_NOTES.md for the full numbers and caveats (small sample size).
-- [~] **Phase 3b — On-device export for IndicConformer (Hindi).** In progress, one
-      real milestone down. `assets/preprocessor.ts` (the mel-spectrogram frontend)
+- [x] **Phase 3b — On-device export for IndicConformer (Hindi). Code-complete,
+      not yet run on a device.** `assets/preprocessor.ts` (the mel-spectrogram frontend)
       couldn't be exported to ONNX directly — `torch.stft`'s complex-tensor output
       isn't supported by ONNX's STFT op — so it was faithfully reimplemented in eager
       PyTorch using `return_complex=False` (mathematically identical, ONNX-exportable)
