@@ -39,6 +39,7 @@ fun RadioScreen(service: RadioService) {
     val transmissionMode by service.transmissionModeFlow.collectAsState()
     val language by service.languageFlow.collectAsState()
     val recognizedText by service.recognizedTextFlow.collectAsState()
+    val alertMode by service.alertModeFlow.collectAsState()
 
     Column(
         modifier = Modifier.fillMaxSize().padding(24.dp),
@@ -119,6 +120,14 @@ fun RadioScreen(service: RadioService) {
                         )
                         Spacer(Modifier.width(8.dp))
                     }
+                }
+                Spacer(Modifier.height(8.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Send as alert")
+                    Switch(
+                        checked = alertMode,
+                        onCheckedChange = { checked -> service.setAlertMode(checked) },
+                    )
                 }
                 Spacer(Modifier.height(8.dp))
                 Text(

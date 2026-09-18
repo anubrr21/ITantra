@@ -26,6 +26,8 @@ import com.itantra.radio.stt.SttEngine
 import com.itantra.radio.stt.VoskModelProvisioner
 import com.itantra.radio.stt.VoskSttEngine
 import com.itantra.radio.tts.AndroidSystemTtsEngine
+import com.itantra.radio.tts.IndicTtsAssetProvisioner
+import com.itantra.radio.tts.IndicTtsEngine
 import com.itantra.radio.tts.TtsEngine
 import com.itantra.radio.vad.WebRtcVoiceActivityDetector
 import kotlinx.coroutines.CoroutineScope
@@ -76,6 +78,9 @@ class RadioService : Service() {
 
     private val _recognizedText = MutableStateFlow("")
     val recognizedTextFlow: StateFlow<String> = _recognizedText.asStateFlow()
+
+    private val _alertMode = MutableStateFlow(false)
+    val alertModeFlow: StateFlow<Boolean> = _alertMode.asStateFlow()
 
     private var sttEngine: SttEngine? = null
     private var ttsEngine: TtsEngine? = null
@@ -132,6 +137,10 @@ class RadioService : Service() {
         wasSpeaking = false
     }
 
+    fun setAlertMode(enabled: Boolean) {
+        _alertMode.value = enabled
+    }
+
     fun setLanguage(language: SupportedLanguage) {
         _language.value = language
 
@@ -142,28 +151,46 @@ class RadioService : Service() {
         ttsEngine = AndroidSystemTtsEngine(applicationContext, language.ttsLocale, language.code)
 
         serviceScope.launch(Dispatchers.IO) {
-            if (language == SupportedLanguage.HINDI) {
-                val engine = runCatching { IndicConformerSttEngine(applicationContext, language.code) }.getOrNull()
-                if (engine != null) {
-                    engine.setOnResult { text -> onRecognizedText(text) }
-                    engine.start()
-                    sttEngine = engine
-                    return@launch
-                }
-            }
-
-            VoskModelProvisioner.unpack(
-                applicationContext,
-                language.voskAssetFolder,
-                onReady = { model ->
-                    val engine = VoskSttEngine(model, language.code)
-                    engine.setOnResult { text -> onRecognizedText(text) }
-                    engine.start()
-                    sttEngine = engine
-                },
-                onError = { },
-            )
+            loadSttEngine(language)
+            upgradeToNeuralTts(language)
         }
+    }
+
+    private fun loadSttEngine(language: SupportedLanguage) {
+        if (language == SupportedLanguage.HINDI) {
+            val engine = runCatching { IndicConformerSttEngine(applicationContext, language.code) }.getOrNull()
+            if (engine != null) {
+                engine.setOnResult { text -> onRecognizedText(text) }
+                engine.start()
+                sttEngine = engine
+                return
+            }
+        }
+
+        VoskModelProvisioner.unpack(
+            applicationContext,
+            language.voskAssetFolder,
+            onReady = { model ->
+                val engine = VoskSttEngine(model, language.code)
+                engine.setOnResult { text -> onRecognizedText(text) }
+                engine.start()
+                sttEngine = engine
+            },
+            onError = { },
+        )
+    }
+
+    private fun upgradeToNeuralTts(language: SupportedLanguage) {
+        if (language != SupportedLanguage.HINDI) return
+        if (!IndicTtsAssetProvisioner.isBundled(applicationContext, language.code)) return
+        val neural = runCatching { IndicTtsEngine(applicationContext, language.code) }.getOrNull() ?: return
+        if (_language.value != language) {
+            neural.stop()
+            return
+        }
+        val previous = ttsEngine
+        ttsEngine = neural
+        previous?.stop()
     }
 
     private fun applyCaptureState() {
@@ -200,7 +227,7 @@ class RadioService : Service() {
 
     private fun onRecognizedText(text: String) {
         _recognizedText.value = text
-        _transport.value?.send(RadioFrameCodec.encode(RadioFrame.Text(text)))
+        _transport.value?.send(RadioFrameCodec.encode(RadioFrame.Text(text, isAlert = _alertMode.value)))
     }
 
     private fun listenForIncomingAudio(transport: Transport) {
@@ -214,7 +241,7 @@ class RadioService : Service() {
                 pttController.onPeerTransmitting(true)
                 when (val frame = RadioFrameCodec.decode(bytes)) {
                     is RadioFrame.Audio -> audioPlayer.playFrame(frame.pcm)
-                    is RadioFrame.Text -> ttsEngine?.speak(frame.text, isAlert = false)
+                    is RadioFrame.Text -> ttsEngine?.speak(frame.text, frame.isAlert)
                     null -> Unit
                 }
             }
