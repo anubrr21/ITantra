@@ -22,13 +22,15 @@ class SpeechSchedulerTest {
         scheduler?.shutdown()
     }
 
+    private fun register(sentence: String): ShortArray = synchronized(texts) {
+        texts.add(sentence)
+        shortArrayOf((texts.size - 1).toShort())
+    }
+
     private fun build(playClip: (String, Boolean, () -> Boolean) -> Boolean): SpeechScheduler {
         val created = SpeechScheduler(
             splitter = { listOf(it) },
-            synthesize = { sentence ->
-                texts.add(sentence)
-                shortArrayOf((texts.size - 1).toShort())
-            },
+            synthesize = { sentence -> register(sentence) },
             playClip = { clip, isAlert, shouldAbort ->
                 val label = texts[clip[0].toInt()]
                 val finished = playClip(label, isAlert, shouldAbort)
@@ -145,8 +147,7 @@ class SpeechSchedulerTest {
             splitter = { it.split("|") },
             synthesize = { sentence ->
                 if (sentence == "bad") error("boom")
-                texts.add(sentence)
-                shortArrayOf((texts.size - 1).toShort())
+                register(sentence)
             },
             playClip = { clip, _, _ ->
                 completed.add(texts[clip[0].toInt()])
@@ -168,5 +169,55 @@ class SpeechSchedulerTest {
         s.enqueue("late", false)
         Thread.sleep(50)
         assertTrue(completed.isEmpty())
+    }
+
+    @Test
+    fun interruptedNormalMessageIsNotSynthesizedAgain() {
+        val normalStarted = CountDownLatch(1)
+        val firstAttempt = AtomicInteger()
+        val s = build { label, isAlert, shouldAbort ->
+            if (!isAlert && label == "n1" && firstAttempt.getAndIncrement() == 0) {
+                normalStarted.countDown()
+                while (!shouldAbort()) Thread.sleep(2)
+                false
+            } else {
+                true
+            }
+        }
+        s.enqueue("n1", false)
+        assertTrue(normalStarted.await(2, TimeUnit.SECONDS))
+        s.enqueue("a1", true)
+        awaitTrue { completed.size == 2 }
+        assertEquals(1, texts.count { it == "n1" })
+    }
+
+    @Test
+    fun nextSentenceIsSynthesizedWhileCurrentOneIsPlaying() {
+        val firstPlaying = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val s = SpeechScheduler(
+            splitter = { it.split("|") },
+            synthesize = { sentence -> register(sentence) },
+            playClip = { clip, _, _ ->
+                val label = texts[clip[0].toInt()]
+                if (label == "s1") {
+                    firstPlaying.countDown()
+                    release.await(2, TimeUnit.SECONDS)
+                }
+                completed.add(label)
+                true
+            },
+            onAlertStart = {},
+            onAlertEnd = {},
+        )
+        scheduler = s
+        s.enqueue("s1|s2|s3", false)
+        assertTrue(firstPlaying.await(2, TimeUnit.SECONDS))
+        awaitTrue { texts.contains("s2") }
+        assertTrue("s3 must not be synthesized before s2 starts playing", !texts.contains("s3"))
+        release.countDown()
+        awaitTrue { completed.size == 3 }
+        assertEquals(listOf("s1", "s2", "s3"), completed.toList())
+        assertEquals(1, texts.count { it == "s2" })
     }
 }

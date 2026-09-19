@@ -28,6 +28,8 @@ import com.itantra.radio.stt.VoskSttEngine
 import com.itantra.radio.tts.AndroidSystemTtsEngine
 import com.itantra.radio.tts.IndicTtsAssetProvisioner
 import com.itantra.radio.tts.IndicTtsEngine
+import com.itantra.radio.tts.PiperAssetProvisioner
+import com.itantra.radio.tts.PiperTtsEngine
 import com.itantra.radio.tts.TtsEngine
 import com.itantra.radio.vad.WebRtcVoiceActivityDetector
 import kotlinx.coroutines.CoroutineScope
@@ -180,10 +182,20 @@ class RadioService : Service() {
         )
     }
 
+    private fun buildNeuralTts(language: SupportedLanguage): TtsEngine? {
+        if (language != SupportedLanguage.HINDI) return null
+        if (PiperAssetProvisioner.isBundled(applicationContext, language.code)) {
+            val piper = runCatching { PiperTtsEngine(applicationContext, language.code) }.getOrNull()
+            if (piper != null) return piper
+        }
+        if (IndicTtsAssetProvisioner.isBundled(applicationContext, language.code)) {
+            return runCatching { IndicTtsEngine(applicationContext, language.code) }.getOrNull()
+        }
+        return null
+    }
+
     private fun upgradeToNeuralTts(language: SupportedLanguage) {
-        if (language != SupportedLanguage.HINDI) return
-        if (!IndicTtsAssetProvisioner.isBundled(applicationContext, language.code)) return
-        val neural = runCatching { IndicTtsEngine(applicationContext, language.code) }.getOrNull() ?: return
+        val neural = buildNeuralTts(language) ?: return
         if (_language.value != language) {
             neural.stop()
             return

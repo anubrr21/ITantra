@@ -40,3 +40,10 @@ app/src/main/assets/indic_conformer/
 
 # Indic-TTS ONNX assets (FastPitch + HiFiGAN) - ~273MB, regenerate via ml/tts/onnx_export
 app/src/main/assets/indic_tts/
+
+app/src/main/assets/piper_tts/
+app/libs/*.aar
+ml/tts/compare/
+ml/tts/device_out/
+ml/tts/exported/
+ml/tts/piper/

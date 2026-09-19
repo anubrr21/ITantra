@@ -4,17 +4,16 @@ import ai.onnxruntime.OnnxTensor
 import ai.onnxruntime.OrtEnvironment
 import ai.onnxruntime.OrtSession
 import android.content.Context
+import android.util.Log
 import org.json.JSONObject
 import java.nio.FloatBuffer
 import java.nio.LongBuffer
-import kotlin.math.abs
-import kotlin.math.max
-import kotlin.math.roundToInt
 
 class IndicTtsEngine(
     context: Context,
     override val languageCode: String,
     private val speakerId: Long = SPEAKER_FEMALE,
+    private val intraOpThreads: Int = DEFAULT_THREADS,
 ) : TtsEngine {
 
     companion object {
@@ -22,17 +21,22 @@ class IndicTtsEngine(
         const val SPEAKER_MALE = 1L
         const val SAMPLE_RATE_HZ = 22_050
         private const val MEL_BINS = 80
-        private const val PEAK_TARGET = 0.9f
         private const val TAIL_SILENCE_MS = 120
+        const val DEFAULT_THREADS = 2
+        private const val LOG_TAG = "IndicTtsEngine"
     }
 
     private val env = OrtEnvironment.getEnvironment()
     private val files = IndicTtsAssetProvisioner.ensureFiles(context, languageCode)
 
+    private fun sessionOptions() = OrtSession.SessionOptions().apply {
+        if (intraOpThreads > 0) setIntraOpNumThreads(intraOpThreads)
+    }
+
     private val fastpitchSession =
-        env.createSession(files.getValue("fastpitch.onnx").absolutePath, OrtSession.SessionOptions())
+        env.createSession(files.getValue("fastpitch.onnx").absolutePath, sessionOptions())
     private val hifiganSession =
-        env.createSession(files.getValue("hifigan.onnx").absolutePath, OrtSession.SessionOptions())
+        env.createSession(files.getValue("hifigan.onnx").absolutePath, sessionOptions())
 
     private val charToId: Map<Char, Int> = run {
         val json = JSONObject(files.getValue("char_to_id.json").readText(Charsets.UTF_8))
@@ -68,23 +72,19 @@ class IndicTtsEngine(
         }
     }
 
-    fun synthesizeToPcm(text: String): ShortArray {
-        val pieces = IndicTtsTextPrep.splitIntoSpeakableChunks(text).map { synthesizeChunk(it) }
-        val merged = ShortArray(pieces.sumOf { it.size })
-        var offset = 0
-        for (piece in pieces) {
-            piece.copyInto(merged, offset)
-            offset += piece.size
-        }
-        return merged
-    }
+    fun synthesizeToPcm(text: String): ShortArray =
+        Pcm16.concat(IndicTtsTextPrep.splitIntoSpeakableChunks(text).map { synthesizeChunk(it) })
 
     private fun synthesizeChunk(chunk: String): ShortArray {
         val tokenIds = IndicTtsTextPrep.toTokenIds(chunk, charToId)
         if (tokenIds.isEmpty()) return ShortArray(0)
+        val t0 = System.nanoTime()
         val mel = runFastpitch(tokenIds)
+        val t1 = System.nanoTime()
         val waveform = runHifigan(mel)
-        return toPcm16(waveform)
+        val t2 = System.nanoTime()
+        Log.d(LOG_TAG, "tokens=${tokenIds.size} frames=${mel.frames} fastpitch_ms=${(t1 - t0) / 1_000_000} hifigan_ms=${(t2 - t1) / 1_000_000}")
+        return Pcm16.fromFloat(waveform, SAMPLE_RATE_HZ, TAIL_SILENCE_MS)
     }
 
     private class Mel(val channelsFirst: FloatArray, val frames: Int)
@@ -125,18 +125,5 @@ class IndicTtsEngine(
         } finally {
             input.close()
         }
-    }
-
-    private fun toPcm16(waveform: FloatArray): ShortArray {
-        var peak = 0f
-        for (sample in waveform) peak = max(peak, abs(sample))
-        val gain = if (peak > 0f) PEAK_TARGET / peak else 1f
-        val tail = SAMPLE_RATE_HZ * TAIL_SILENCE_MS / 1000
-        val pcm = ShortArray(waveform.size + tail)
-        for (i in waveform.indices) {
-            pcm[i] = (waveform[i] * gain * Short.MAX_VALUE).roundToInt()
-                .coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort()
-        }
-        return pcm
     }
 }

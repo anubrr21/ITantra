@@ -19,16 +19,17 @@ import java.nio.ByteOrder
 import kotlin.math.sqrt
 
 @RunWith(AndroidJUnit4::class)
-class IndicTtsEngineDeviceTest {
+class PiperTtsEngineDeviceTest {
 
-    private val tag = "IndicTtsDeviceTest"
+    private val tag = "PiperDeviceTest"
     private lateinit var context: Context
-    private var engine: IndicTtsEngine? = null
+    private var engine: PiperTtsEngine? = null
 
     private val sentences = listOf(
         "नमस्ते, यह एक परीक्षण है",
         "मदद भेजो अभी",
         "पानी खत्म हो गया है जल्दी आओ हमें बहुत मदद चाहिए यहाँ बाढ़ आ गई है और सड़क बंद है",
+        "हम 28 लोग फंसे हैं। पानी खत्म हो गया है। कृपया जल्दी मदद भेजो। डॉक्टर और ऑक्सीजन चाहिए।",
     )
 
     @Before
@@ -69,16 +70,16 @@ class IndicTtsEngineDeviceTest {
     @Test
     fun synthesizesAudibleSpeechAndReportsPerformance() {
         val loadStart = System.currentTimeMillis()
-        val tts = IndicTtsEngine(context, "hi")
+        val tts = PiperTtsEngine(context, "hi")
         engine = tts
         val loadMs = System.currentTimeMillis() - loadStart
-        Log.i(tag, "LOAD_MS=$loadMs native_heap_mb=${Debug.getNativeHeapAllocatedSize() / 1_000_000}")
+        Log.i(tag, "LOAD_MS=$loadMs sample_rate=${tts.sampleRateHz} native_heap_mb=${Debug.getNativeHeapAllocatedSize() / 1_000_000}")
 
         sentences.forEachIndexed { index, text ->
             val start = System.currentTimeMillis()
             val pcm = tts.synthesizeToPcm(text)
             val elapsedMs = System.currentTimeMillis() - start
-            val audioMs = pcm.size * 1000L / IndicTtsEngine.SAMPLE_RATE_HZ
+            val audioMs = pcm.size * 1000L / tts.sampleRateHz
             val level = rms(pcm)
             Log.i(
                 tag,
@@ -86,21 +87,8 @@ class IndicTtsEngineDeviceTest {
             )
             assertTrue("sentence $index produced too little audio: ${audioMs}ms", audioMs > 500)
             assertTrue("sentence $index is near-silent: rms=$level", level > 0.02)
-            writeWav(File(outputDir(), "kotlin_hi_$index.wav"), pcm, IndicTtsEngine.SAMPLE_RATE_HZ)
+            writeWav(File(outputDir(), "piper_hi_$index.wav"), pcm, tts.sampleRateHz)
         }
-    }
-
-    @Test
-    fun maleAndFemaleVoicesDiffer() {
-        val female = IndicTtsEngine(context, "hi", IndicTtsEngine.SPEAKER_FEMALE)
-        val femalePcm = female.synthesizeToPcm(sentences[0])
-        female.stop()
-        val male = IndicTtsEngine(context, "hi", IndicTtsEngine.SPEAKER_MALE)
-        engine = male
-        val malePcm = male.synthesizeToPcm(sentences[0])
-        writeWav(File(outputDir(), "kotlin_hi_female.wav"), femalePcm, IndicTtsEngine.SAMPLE_RATE_HZ)
-        writeWav(File(outputDir(), "kotlin_hi_male.wav"), malePcm, IndicTtsEngine.SAMPLE_RATE_HZ)
-        assertTrue(femalePcm.size != malePcm.size || !femalePcm.contentEquals(malePcm))
     }
 
     @Test
@@ -108,7 +96,7 @@ class IndicTtsEngineDeviceTest {
         val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
         val original = audioManager.getStreamVolume(AudioManager.STREAM_ALARM)
         val max = audioManager.getStreamMaxVolume(AudioManager.STREAM_ALARM)
-        val tts = IndicTtsEngine(context, "hi")
+        val tts = PiperTtsEngine(context, "hi")
         engine = tts
 
         tts.speak(sentences[1], isAlert = true)
@@ -132,27 +120,13 @@ class IndicTtsEngineDeviceTest {
 
     @Test
     fun normalThenAlertPlaybackCompletesWithoutCrashing() {
-        val tts = IndicTtsEngine(context, "hi")
+        val tts = PiperTtsEngine(context, "hi")
         engine = tts
-        tts.speak("पानी खत्म हो गया है। जल्दी आओ। हमें बहुत मदद चाहिए।", isAlert = false)
-        Thread.sleep(9_000)
+        tts.speak(sentences[3], isAlert = false)
+        Thread.sleep(3_000)
         tts.speak(sentences[1], isAlert = true)
-        Thread.sleep(30_000)
+        Thread.sleep(20_000)
         tts.stop()
         engine = null
-    }
-
-    @Test
-    fun threadCountSweep() {
-        for (threads in listOf(0, 1, 2, 4, 6, 8)) {
-            val tts = IndicTtsEngine(context, "hi", intraOpThreads = threads)
-            tts.synthesizeToPcm(sentences[1])
-            val start = System.currentTimeMillis()
-            val pcm = tts.synthesizeToPcm(sentences[2])
-            val elapsed = System.currentTimeMillis() - start
-            val audioMs = pcm.size * 1000L / IndicTtsEngine.SAMPLE_RATE_HZ
-            Log.i(tag, "THREADS=$threads synth_ms=$elapsed audio_ms=$audioMs rtf=${"%.2f".format(elapsed.toDouble() / audioMs)}")
-            tts.stop()
-        }
     }
 }

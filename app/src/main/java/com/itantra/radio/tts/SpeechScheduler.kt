@@ -1,6 +1,10 @@
 package com.itantra.radio.tts
 
 import java.util.ArrayDeque
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
+import java.util.concurrent.Future
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
 
@@ -11,13 +15,20 @@ class SpeechScheduler(
     private val onAlertStart: () -> Unit,
     private val onAlertEnd: () -> Unit,
 ) {
-    private class Job(val sentences: ArrayDeque<String>, val isAlert: Boolean)
+    private class Job(val sentences: ArrayDeque<String>, val isAlert: Boolean) {
+        var headClip: ShortArray? = null
+        var prefetch: Future<ShortArray?>? = null
+    }
 
     private val lock = ReentrantLock()
     private val hasWork = lock.newCondition()
     private val alertQueue = ArrayDeque<Job>()
     private val normalQueue = ArrayDeque<Job>()
     private var running = true
+
+    private val prefetchExecutor: ExecutorService = Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "tts-prefetch").apply { isDaemon = true }
+    }
 
     private val worker = Thread({ runLoop() }, "tts-scheduler").apply {
         isDaemon = true
@@ -42,8 +53,10 @@ class SpeechScheduler(
             normalQueue.clear()
             hasWork.signalAll()
         }
+        prefetchExecutor.shutdownNow()
         worker.join(SHUTDOWN_JOIN_MS)
-        return !worker.isAlive
+        val prefetchDone = prefetchExecutor.awaitTermination(SHUTDOWN_JOIN_MS, TimeUnit.MILLISECONDS)
+        return !worker.isAlive && prefetchDone
     }
 
     private fun isRunning(): Boolean = lock.withLock { running }
@@ -61,15 +74,42 @@ class SpeechScheduler(
         }
     }
 
+    private fun safeSynthesize(sentence: String): ShortArray? = runCatching { synthesize(sentence) }.getOrNull()
+
+    private fun obtainHeadClip(job: Job): ShortArray? {
+        job.headClip?.let { return it }
+        val pending = job.prefetch
+        job.prefetch = null
+        val clip = if (pending != null) {
+            runCatching { pending.get() }.getOrNull()
+        } else {
+            safeSynthesize(job.sentences.first)
+        }
+        job.headClip = clip
+        return clip
+    }
+
+    private fun startPrefetch(job: Job) {
+        if (job.prefetch != null || job.sentences.size < 2 || !isRunning()) return
+        val next = job.sentences.elementAt(1)
+        job.prefetch = runCatching { prefetchExecutor.submit<ShortArray?> { safeSynthesize(next) } }.getOrNull()
+    }
+
+    private fun finishHead(job: Job) {
+        job.headClip = null
+        job.sentences.removeFirst()
+    }
+
     private fun playAlert(job: Job) {
         onAlertStart()
         try {
             while (job.sentences.isNotEmpty() && isRunning()) {
-                val clip = runCatching { synthesize(job.sentences.first) }.getOrNull()
+                val clip = obtainHeadClip(job)
                 if (clip != null && clip.isNotEmpty()) {
+                    startPrefetch(job)
                     playClip(clip, true) { !isRunning() }
                 }
-                job.sentences.removeFirst()
+                finishHead(job)
             }
         } finally {
             onAlertEnd()
@@ -82,21 +122,22 @@ class SpeechScheduler(
                 requeue(job)
                 return
             }
-            val clip = runCatching { synthesize(job.sentences.first) }.getOrNull()
+            val clip = obtainHeadClip(job)
             if (clip == null || clip.isEmpty()) {
-                job.sentences.removeFirst()
+                finishHead(job)
                 continue
             }
             if (alertPending()) {
                 requeue(job)
                 return
             }
+            startPrefetch(job)
             val completed = playClip(clip, false) { alertPending() || !isRunning() }
             if (!completed) {
                 if (isRunning()) requeue(job)
                 return
             }
-            job.sentences.removeFirst()
+            finishHead(job)
         }
     }
 

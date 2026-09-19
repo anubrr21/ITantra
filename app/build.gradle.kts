@@ -46,6 +46,9 @@ android {
     }
 
     packaging {
+        jniLibs {
+            pickFirsts += "lib/x86/libonnxruntime.so"
+        }
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }
@@ -74,6 +77,7 @@ dependencies {
     implementation("com.alphacephei:vosk-android:0.3.75")
     implementation("com.github.gkonovalov.android-vad:webrtc:2.0.10")
     implementation("com.microsoft.onnxruntime:onnxruntime-android:1.27.0")
+    implementation(files("libs/sherpa-onnx-static-link-onnxruntime-1.13.8.aar"))
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20240303")
