@@ -256,3 +256,29 @@ The problem statement requires open-source/TinyML frameworks and explicitly allo
 - https://github.com/murtaza98/Walkie-Talkie (WiFi Direct walkie-talkie reference)
 - https://github.com/gms298/Android-Walkie-Talkie (Bluetooth walkie-talkie reference)
 - https://f-droid.org/packages/org.jsl.wfwt/ (WiFi walkie-talkie reference)
+
+## Phase 4 outcome: Piper (pratham) replaces FastPitch+HiFiGAN for Hindi
+
+The AI4Bharat FastPitch+HiFiGAN pair ran correctly on-device but the user judged it
+robotic, and it was slow on a low-end phone (RTF 1.2-2.0). Piper's Hindi voices
+(`rhasspy/piper-voices`, `hi/hi_IN`: pratham, priyamvada, rohan) were compared by ear
+and **pratham** was chosen. They are trained on the same IIT-Madras IndicTTS recordings
+(see the dataset license linked from the voice's MODEL_CARD), so the difference is the
+VITS architecture, not new data.
+
+- **Runtime:** sherpa-onnx v1.13.8 `static-link-onnxruntime` AAR (38.7MB, placed in
+  `app/libs/`, git-ignored; download from the k2-fsa/sherpa-onnx GitHub release). It
+  statically links its own ONNX Runtime so it cannot clash with the
+  `onnxruntime-android` the STT engine uses. Only a stray x86 `libonnxruntime.so` needed
+  a `pickFirsts` rule.
+- **Phonemization:** Hindi needs espeak-ng (stress placement, schwa deletion and
+  cross-word effects are not a simple letter table), bundled inside that AAR. Its data
+  is trimmed to ~1.3MB (`hi_dict`, `en_dict`, phondata, lang, voices).
+- **License:** espeak-ng is GPL-3, so the distributed app is effectively GPL-3.
+- **Reproduce:** `ml/tts/piper_export/convert_to_sherpa.py` adds the metadata sherpa
+  expects and writes `tokens.txt` (LF endings required); `stage_android_assets.py`
+  stages `app/src/main/assets/piper_tts/hi/`. Voice files: download `hi_IN-pratham-medium
+  .onnx` and `.onnx.json` into `ml/tts/piper/`.
+- **Quantization:** FastPitch int8 (MatMul only) saved 37MB and shifted predicted
+  durations; not shipped. HiFiGAN is conv-only and stays fp32 (ConvInteger is not
+  supported on ORT CPU).

@@ -41,7 +41,7 @@ class IndicConformerSttEngine(
 
         val maskJson = JSONObject(files.getValue("language_masks.json").readText(Charsets.UTF_8))
         val maskArray = maskJson.getJSONArray(languageCode)
-        languageMask = IntArray(maskArray.length()) { maskArray.getInt(it) }
+        languageMask = LanguageMask.selectedIndices(maskArray)
     }
 
     private val bufferedPcm = ByteArrayOutputStream()

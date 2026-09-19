@@ -46,6 +46,7 @@ discipline. Run in order:
 - HiFiGAN: 1016MB raw checkpoint → 56MB ONNX (stripped discriminator + optimizer state)
 - Combined: ~273MB, already far more reasonable than the raw 1.65GB
 
-**Not done yet:** quantization, and the Kotlin/`onnxruntime-android` port as
-`IndicTtsEngine`. Also not yet handled: the spec's exact playback rules (normal
-messages as a voice note, alert-type messages at max volume and non-interruptible).
+**Outcome:** the Kotlin port (`IndicTtsEngine`) works on-device, but the shipped Hindi
+voice is now Piper pratham (see `ml/tts/piper_export/` and `docs/MODEL_NOTES.md`);
+FastPitch+HiFiGAN stays as a fallback. FastPitch int8 was tried
+(`quantize_fastpitch.py`, `verify_quantized_fastpitch.py`) and rejected.

@@ -6,7 +6,7 @@ import java.io.File
 object PiperAssetProvisioner {
     private const val ASSET_ROOT = "piper_tts"
     private const val COMPLETE_MARKER = ".complete"
-    private const val ASSET_VERSION = "pratham-medium-v1"
+    private const val ASSET_VERSION = "pratham-medium-v2"
     private val REQUIRED = listOf("model.onnx", "tokens.txt", "espeak-ng-data")
 
     class Files(val model: File, val tokens: File, val espeakData: File)

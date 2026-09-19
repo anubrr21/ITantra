@@ -73,27 +73,36 @@ below for the details and why nobody should assume these are guesses.
       real device RAM numbers, or falling back to the 120M per-language NeMo checkpoint
       if it proves impractical. Worth deciding later whether to do the remaining 8
       languages (Phase 6) through this same exported pipeline in a batch.
-- [~] **Phase 4 — TTS upgrade: AI4Bharat Indic-TTS.** In progress, ONNX export done and
-      verified. Real bring-up: downloaded the Hindi FastPitch+HiFiGAN checkpoint (not
-      gated, unlike STT — plain GitHub Release download), got it running via the
-      `coqui-tts` package in its own venv (`ml/.venv-tts`), fixed a real bug (a
-      hardcoded path in the checkpoint's `config.json`), validated output quality via
-      round-trip through the verified Phase 3b STT (`ml/tts/hindi_tts_sample.wav`).
-      **ONNX export, done and verified** (`ml/tts/onnx_export/`): FastPitch hit a real
-      dynamic-shape bug in `nn.MultiheadAttention`'s legacy ONNX export (worked
-      correctly for the exact traced length, silently produced wrong output — actually
-      a crash — for any other length) and a tracing blocker in a positional-encoding
-      guard clause; fixed by switching to the newer `torch.export`-based exporter and
-      patching out the (safe-to-remove) guard. HiFiGAN exported cleanly (simpler,
-      no attention). Both re-verified across multiple very different input lengths, not
-      just the traced one. Real sizes: FastPitch 637MB→217MB, HiFiGAN 1016MB→56MB
-      (~273MB combined, before quantization — already close to the STT model's
-      quantized size). Full pure-ONNX-Runtime pipeline (no PyTorch) verified via the
-      same round-trip STT technique — reproduces the correct words exactly.
-      **Still needed:** quantization, the Kotlin/`onnxruntime-android` port as
-      `IndicTtsEngine`, and the spec's exact playback rules (normal messages as a voice
-      note, alert-type messages at max volume and non-interruptible — not implemented
-      at all yet, current `AndroidSystemTtsEngine` bring-up doesn't distinguish them).
+- [x] **Phase 4 — TTS upgrade.** Done and verified on a real device (Redmi A7 Pro 5G,
+      4GB RAM), with the caveats below. Shipped voice: **Piper `hi_IN-pratham-medium`**
+      (VITS), run through the sherpa-onnx static-link AAR (espeak-ng inside, no
+      ONNX Runtime clash with the STT engine). Chosen by ear over AI4Bharat's
+      FastPitch+HiFiGAN, which the user found robotic; both are trained on the same
+      IIT-Madras IndicTTS data, so the gain is architectural. Measured on the phone:
+      Piper real-time factor ~0.18 (FastPitch+HiFiGAN was 1.2-2.0, with HiFiGAN 80% of
+      the time), load 3.2s, ~64MB of assets, reads digits and English-origin words
+      itself. Round-trip check: Piper audio synthesized *on the phone* transcribes
+      word-for-word through the on-device IndicConformer (both models loaded together,
+      ~1GB native heap). Playback rules from the spec are implemented and unit-tested:
+      normal messages queue as voice notes; alerts jump the queue, interrupt a playing
+      message (which resumes without re-synthesis), are never interrupted, play on the
+      alarm stream at max volume, and the volume is restored afterwards. Alerts travel
+      on the wire as a new frame tag (legacy tags untouched); the Radio screen has a
+      "Send as alert" switch. Fallback chain: Piper -> FastPitch/HiFiGAN (if its assets
+      are provisioned) -> system TTS; English stays on system TTS.
+      **Findings worth knowing:** (1) FastPitch int8 quantization was tried and rejected
+      (only 37MB saved, predicted durations drift). (2) sherpa exits the whole process
+      on a malformed `tokens.txt`; it must use LF endings (the staging script does).
+      (3) Provisioned assets are copied once, so bump `ASSET_VERSION` in
+      `PiperAssetProvisioner` whenever bundled files change. (4) espeak-ng is GPL, so the
+      app as distributed is effectively GPL-3 (fine for an open-source entry, but a
+      conscious licensing choice). (5) A real Phase 3b bug was found here: the Kotlin
+      IndicConformer engine crashed on init (language mask is a boolean array, not
+      indices) and `RadioService` silently fell back to Vosk, so the accurate Hindi
+      recognizer had never actually run on a device until this fix. It is now covered by
+      unit and on-device tests. (6) Audio routes to Bluetooth earbuds when connected, so
+      alerts would not reach a loudspeaker; deciding whether alerts should force the
+      speaker is open. **Not done:** two-phone loop, and only Hindi has a neural voice.
 - [ ] **Phase 5 — Full loop validation.** Two phones, one in STT mode / one in TTS mode,
       measure round-trip latency exactly as the spec's evaluation method describes.
 - [ ] **Phase 6 — Multilingual expansion.** Repeat Phase 3/4's benchmark-and-pick pattern

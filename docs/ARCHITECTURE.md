@@ -128,3 +128,24 @@ aren't present) and still uses Vosk directly for every other language, since
 AI4Bharat has no English model. Model construction runs on `Dispatchers.IO` inside
 `serviceScope`, not the calling thread — copying ~900MB and loading an 880MB ONNX
 session the first time a language is selected would otherwise freeze the UI.
+
+## Phase 4: neural TTS and playback rules
+
+`RadioService.setLanguage()` starts with `AndroidSystemTtsEngine` so speech works
+immediately, then on `Dispatchers.IO` swaps in a neural engine for Hindi:
+`PiperTtsEngine` (sherpa-onnx VITS, pratham) if its assets are bundled, else
+`IndicTtsEngine` (FastPitch+HiFiGAN via ONNX Runtime) if provisioned, else it stays on
+system TTS. `PiperAssetProvisioner` copies the assets to internal storage once, guarded
+by a version marker.
+
+All neural engines share `SpeechScheduler`, which owns the spec's playback rules:
+normal messages play in arrival order; an alert jumps ahead of queued messages,
+interrupts a playing normal message (its already-synthesized clip is kept and replayed
+afterwards), and is never interrupted itself. While an alert is active the alarm stream
+is raised to max (`AlertVolumeGuard`) and restored afterwards; clips play through
+`ClipPlayer` (`AudioTrack`, `USAGE_ALARM` for alerts, `USAGE_MEDIA` otherwise). The
+next sentence is synthesized while the current one plays. Synthesis calls on the Piper
+engine are serialised because espeak-ng is not thread-safe.
+
+An alert is a distinct `RadioFrame` tag byte (2) carrying UTF-8 text; the normal text
+(1) and audio (0) tags are unchanged, so existing behaviour and peers are unaffected.
