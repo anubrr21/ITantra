@@ -10,28 +10,41 @@ class VoskSttEngine(
     override val languageCode: String,
 ) : SttEngine {
 
+    private val lock = Any()
     private var recognizer: Recognizer? = null
+
+    @Volatile
     private var onResult: ((String) -> Unit)? = null
 
     override fun start() {
-        recognizer = newRecognizer()
+        synchronized(lock) {
+            recognizer?.close()
+            recognizer = newRecognizer()
+        }
     }
 
     override fun acceptAudioFrame(frame: ByteArray) {
-        recognizer?.acceptWaveForm(frame, frame.size)
+        synchronized(lock) {
+            recognizer?.acceptWaveForm(frame, frame.size)
+        }
     }
 
     override fun endUtterance() {
-        val current = recognizer ?: return
-        val text = runCatching { JSONObject(current.finalResult).optString("text", "") }.getOrDefault("")
-        current.close()
-        recognizer = newRecognizer()
+        val text = synchronized(lock) {
+            val current = recognizer ?: return
+            val recognized = runCatching { JSONObject(current.finalResult).optString("text", "") }.getOrDefault("")
+            current.close()
+            recognizer = newRecognizer()
+            recognized
+        }
         if (text.isNotBlank()) onResult?.invoke(text)
     }
 
     override fun stop() {
-        recognizer?.close()
-        recognizer = null
+        synchronized(lock) {
+            recognizer?.close()
+            recognizer = null
+        }
     }
 
     override fun setOnResult(callback: (String) -> Unit) {

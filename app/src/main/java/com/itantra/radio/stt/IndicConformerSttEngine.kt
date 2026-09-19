@@ -44,20 +44,27 @@ class IndicConformerSttEngine(
         languageMask = LanguageMask.selectedIndices(maskArray)
     }
 
+    private val bufferLock = Any()
+    private val sessionLock = Any()
     private val bufferedPcm = ByteArrayOutputStream()
+
+    @Volatile
     private var onResult: ((String) -> Unit)? = null
 
     override fun start() {
-        bufferedPcm.reset()
+        synchronized(bufferLock) { bufferedPcm.reset() }
     }
 
     override fun acceptAudioFrame(frame: ByteArray) {
-        bufferedPcm.write(frame)
+        synchronized(bufferLock) { bufferedPcm.write(frame) }
     }
 
     override fun endUtterance() {
-        val pcm = bufferedPcm.toByteArray()
-        bufferedPcm.reset()
+        val pcm = synchronized(bufferLock) {
+            val snapshot = bufferedPcm.toByteArray()
+            bufferedPcm.reset()
+            snapshot
+        }
         if (pcm.size < 2) return
 
         val samples = FloatArray(pcm.size / 2)
@@ -68,15 +75,17 @@ class IndicConformerSttEngine(
             samples[i] = sample.toShort() / 32768f
         }
 
-        val text = runCatching { transcribe(samples) }.getOrDefault("")
+        val text = synchronized(sessionLock) { runCatching { transcribe(samples) }.getOrDefault("") }
         if (text.isNotBlank()) onResult?.invoke(text)
     }
 
     override fun stop() {
-        bufferedPcm.reset()
-        runCatching { preprocessorSession.close() }
-        runCatching { encoderSession.close() }
-        runCatching { ctcDecoderSession.close() }
+        synchronized(bufferLock) { bufferedPcm.reset() }
+        synchronized(sessionLock) {
+            runCatching { preprocessorSession.close() }
+            runCatching { encoderSession.close() }
+            runCatching { ctcDecoderSession.close() }
+        }
     }
 
     override fun setOnResult(callback: (String) -> Unit) {

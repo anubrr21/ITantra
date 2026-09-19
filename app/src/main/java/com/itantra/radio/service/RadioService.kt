@@ -246,7 +246,7 @@ class RadioService : Service() {
         if (captureJob?.isActive == true) return
         val transport = _transport.value ?: return
         captureJob = serviceScope.launch {
-            audioCapturer.capture().onEach { frame -> handleCapturedFrame(transport, frame) }.launchIn(this)
+            audioCapturer.capture().onEach { frame -> if (isActive) handleCapturedFrame(transport, frame) }.launchIn(this)
         }
     }
 

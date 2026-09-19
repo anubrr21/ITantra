@@ -283,6 +283,12 @@ single-device testing could not reveal:
   trapped near debris"; Hindi 2 of 3 acceptable (the small Vosk Hindi model misses
   "मदद भेजो अभी", which is why Hindi uses IndicConformer).
 
+- **Native crash when releasing push-to-talk mid-speech (English).** The release-to-finish
+  fix finalized and freed the Vosk recognizer on one thread while the microphone thread was
+  still feeding it audio, so `Recognizer::AcceptWaveform` dereferenced freed memory and killed
+  the app (reproduced on the phone by `VoskConcurrencyDeviceTest`, which crashed the process
+  before the fix and passes after). Both STT engines are now thread-safe (one lock around
+  every recognizer/session/buffer access) and late frames after a release are ignored.
 Verified end to end: Hindi spoken into phone 1 is recognized by IndicConformer, sent as
 text over Bluetooth and spoken by Piper (pratham) on phone 2; raw push-to-talk audio is
 smooth; user-measured speech-end to speech-start delay is roughly 2-3 seconds. WiFi Direct between the two phones
