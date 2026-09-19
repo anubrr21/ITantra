@@ -47,3 +47,6 @@ ml/tts/compare/
 ml/tts/device_out/
 ml/tts/exported/
 ml/tts/piper/
+
+# English STT candidate models (benchmark only; see docs/MODEL_NOTES.md)
+ml/stt/english_models/
