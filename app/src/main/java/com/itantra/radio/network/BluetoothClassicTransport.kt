@@ -41,6 +41,7 @@ class BluetoothClassicTransport(
 
     private val incoming = Channel<ByteArray>(capacity = 64)
     private var socket: BluetoothSocket? = null
+    private var writer: SerialFrameWriter? = null
     private var serverSocket: BluetoothServerSocket? = null
     private var bondedDevices: Map<String, BluetoothDevice> = emptyMap()
 
@@ -67,6 +68,7 @@ class BluetoothClassicTransport(
                 _state.value = TransportState.Discovering
                 val client = server.accept()
                 socket = client
+                openWriter(client)
                 runCatching { server.close() }
                 serverSocket = null
                 _state.value = TransportState.Connected(
@@ -91,11 +93,20 @@ class BluetoothClassicTransport(
                 val client = device.createRfcommSocketToServiceRecord(SERVICE_UUID)
                 client.connect()
                 socket = client
+                openWriter(client)
                 _state.value = TransportState.Connected(peer)
                 listenLoop(client)
             } catch (e: IOException) {
                 _state.value = TransportState.Failed("Bluetooth connect error: ${e.message}")
             }
+        }
+    }
+
+    private fun openWriter(client: BluetoothSocket) {
+        writer?.close()
+        writer = SerialFrameWriter(scope, client.outputStream) { error ->
+            Log.e(TAG, "send failed", error)
+            reportLinkLost(client, "send failed: ${error.message}")
         }
     }
 
@@ -105,22 +116,24 @@ class BluetoothClassicTransport(
             val frame = FrameCodec.readFrame(input) ?: break
             incoming.trySend(frame)
         }
+        reportLinkLost(client, "peer closed the link or sent invalid data")
+    }
+
+    private fun reportLinkLost(client: BluetoothSocket, reason: String) {
+        if (socket !== client) return
+        Log.w(TAG, "link lost: $reason")
+        _state.value = TransportState.Failed("Link to peer lost ($reason)")
     }
 
     override fun send(frame: ByteArray) {
-        val client = socket ?: return
-        scope.launch(Dispatchers.IO) {
-            try {
-                FrameCodec.writeFrame(client.outputStream, frame)
-            } catch (e: IOException) {
-                Log.e(TAG, "send failed", e)
-            }
-        }
+        writer?.send(frame)
     }
 
     override fun incomingFrames(): Flow<ByteArray> = incoming.receiveAsFlow()
 
     override fun disconnect() {
+        writer?.close()
+        writer = null
         runCatching { socket?.close() }
         runCatching { serverSocket?.close() }
         socket = null

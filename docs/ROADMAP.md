@@ -118,6 +118,17 @@ below for the details and why nobody should assume these are guesses.
       diagrams, a written test report scored against the problem statement's own
       evaluation metrics table.
 
+- [ ] **Phase 9 — Cross-language translation (after Phase 8, requested by the user).**
+      Today the app is speech -> text -> speech in the *same* language: text is sent as
+      recognized and the receiving phone reads it with its own voice, so English spoken on
+      one phone read by a phone set to Hindi is not translated (the Hindi voice cannot read
+      English). Planned: tag each text frame with its source language so the receiver can
+      pick the right voice, then add on-device machine translation (candidate: AI4Bharat
+      IndicTrans2 distilled ~200M, exported to ONNX and int8-quantized, with its
+      SentencePiece preprocessing and a decoder in Kotlin), with a "translate to my
+      language" switch. Needs a size/latency benchmark on the target phones like Phases 3
+      and 4 did.
+
 ## Why this order
 
 Training or fine-tuning is the highest-risk, highest-effort part of this project — it
@@ -226,3 +237,33 @@ bugs found and fixed, in order encountered:
 Still not tested: full two-phone WiFi Direct/Bluetooth pairing, actual audio streaming
 end-to-end, VAD/STT/TTS running through the real UI (blocked on reaching `RadioScreen`,
 which requires a successful pairing), and anything in Phase 4+.
+
+## Two-phone testing (2026-09-19)
+
+Tested with a Redmi A7 Pro 5G (4GB, Android 16) and a Redmi 13 5G (8GB, Android 15),
+Bluetooth Classic. No SIM or internet needed on either. Findings, all real bugs that
+single-device testing could not reveal:
+
+- **Frames were written concurrently.** `send()` launched one coroutine per 20ms frame, all
+  writing to the same socket, so the length header and payload of different frames
+  interleaved; the receiver read a garbled length, `readFrame` returned null and the
+  listen loop ended for good, leaving the receiver on "Idle" forever. Fixed with a single
+  ordered `SerialFrameWriter` per link, one write per frame, and a visible
+  "Link to peer lost" state instead of a silent stall. Same fix in WiFi Direct.
+- **Raw audio played on the voice-call stream**, whose speaker volume was 1 of 11 and is not
+  controlled by the volume buttons. Now plays on the media stream.
+- **Choppy raw audio.** The receiver had ~80ms of buffer. Added an 8-frame (160ms)
+  pre-buffer with a 600ms track buffer, re-armed after each burst.
+- **Voice -> text never finished if you spoke until you released PTT**, because an
+  utterance only ended on a following silent frame. Releasing the button now finishes it.
+- **No feedback while models load** (~1GB on first Hindi selection). The Radio screen now
+  shows a status line, and IndicConformer/Piper load failures are logged instead of
+  swallowed.
+- Xiaomi/HyperOS without a SIM cannot enable "Install via USB": the second phone was
+  installed by copying the APK with `adb push` and installing from the file manager
+  (choose "Open with -> Package installer"; WPS Office had claimed the APK type).
+
+Verified end to end: Hindi spoken into phone 1 is recognized by IndicConformer, sent as
+text over Bluetooth and spoken by Piper (pratham) on phone 2; raw push-to-talk audio is
+smooth; user-measured speech-end to speech-start delay is roughly 2-3 seconds. Still to
+verify: the alert path across two phones, WiFi Direct between two phones, and phone mode.

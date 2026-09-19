@@ -41,6 +41,7 @@ class WifiDirectTransport(
 
     private val incoming = Channel<ByteArray>(capacity = 64)
     private var socket: Socket? = null
+    private var writer: SerialFrameWriter? = null
     private var serverSocket: ServerSocket? = null
     private var discoveredDevices: Map<String, WifiP2pDevice> = emptyMap()
     private var isRegistered = false
@@ -133,6 +134,7 @@ class WifiDirectTransport(
             serverSocket = server
             val client = server.accept()
             socket = client
+            openWriter(client)
             _state.value = TransportState.Connected(
                 TransportPeer(client.inetAddress.hostAddress ?: "peer", "Peer"),
             )
@@ -147,10 +149,19 @@ class WifiDirectTransport(
             val client = Socket()
             client.connect(InetSocketAddress(hostAddress, PORT), CONNECT_TIMEOUT_MS)
             socket = client
+            openWriter(client)
             _state.value = TransportState.Connected(TransportPeer(hostAddress, "Host"))
             listenLoop(client)
         } catch (e: IOException) {
             _state.value = TransportState.Failed("WiFi Direct client socket error: ${e.message}")
+        }
+    }
+
+    private fun openWriter(client: Socket) {
+        writer?.close()
+        writer = SerialFrameWriter(scope, client.getOutputStream()) { error ->
+            Log.e(TAG, "send failed", error)
+            reportLinkLost(client, "send failed: ${error.message}")
         }
     }
 
@@ -160,22 +171,24 @@ class WifiDirectTransport(
             val frame = FrameCodec.readFrame(input) ?: break
             incoming.trySend(frame)
         }
+        reportLinkLost(client, "peer closed the link or sent invalid data")
+    }
+
+    private fun reportLinkLost(client: Socket, reason: String) {
+        if (socket !== client) return
+        Log.w(TAG, "link lost: $reason")
+        _state.value = TransportState.Failed("Link to peer lost ($reason)")
     }
 
     override fun send(frame: ByteArray) {
-        val client = socket ?: return
-        scope.launch(Dispatchers.IO) {
-            try {
-                FrameCodec.writeFrame(client.getOutputStream(), frame)
-            } catch (e: IOException) {
-                Log.e(TAG, "send failed", e)
-            }
-        }
+        writer?.send(frame)
     }
 
     override fun incomingFrames(): Flow<ByteArray> = incoming.receiveAsFlow()
 
     override fun disconnect() {
+        writer?.close()
+        writer = null
         runCatching { socket?.close() }
         runCatching { serverSocket?.close() }
         socket = null

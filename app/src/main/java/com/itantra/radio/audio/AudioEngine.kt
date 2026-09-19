@@ -59,7 +59,15 @@ class AudioCapturer {
 
 class AudioPlayer {
     private var audioTrack: AudioTrack? = null
+    private var playing = false
+    private var queuedBytes = 0
 
+    companion object {
+        private const val BUFFER_FRAMES = 30
+        private const val PREBUFFER_FRAMES = 8
+    }
+
+    @Synchronized
     fun start() {
         if (audioTrack != null) return
         val minBuffer = AudioTrack.getMinBufferSize(
@@ -70,7 +78,7 @@ class AudioPlayer {
         audioTrack = AudioTrack.Builder()
             .setAudioAttributes(
                 AudioAttributes.Builder()
-                    .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
+                    .setUsage(AudioAttributes.USAGE_MEDIA)
                     .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
                     .build(),
             )
@@ -81,19 +89,46 @@ class AudioPlayer {
                     .setEncoding(AudioConfig.ENCODING)
                     .build(),
             )
-            .setBufferSizeInBytes(maxOf(minBuffer, AudioConfig.FRAME_BYTES * 4))
+            .setBufferSizeInBytes(maxOf(minBuffer, AudioConfig.FRAME_BYTES * BUFFER_FRAMES))
             .setTransferMode(AudioTrack.MODE_STREAM)
             .build()
-        audioTrack?.play()
+        playing = false
+        queuedBytes = 0
     }
 
+    @Synchronized
     fun playFrame(frame: ByteArray) {
-        audioTrack?.write(frame, 0, frame.size)
+        val track = audioTrack ?: return
+        track.write(frame, 0, frame.size)
+        if (!playing) {
+            queuedBytes += frame.size
+            if (queuedBytes >= AudioConfig.FRAME_BYTES * PREBUFFER_FRAMES) {
+                track.play()
+                playing = true
+            }
+        }
     }
 
+    @Synchronized
+    fun endOfBurst() {
+        val track = audioTrack ?: return
+        if (!playing && queuedBytes > 0) {
+            track.play()
+            playing = true
+        }
+        if (playing) {
+            track.stop()
+            playing = false
+        }
+        queuedBytes = 0
+    }
+
+    @Synchronized
     fun stop() {
         audioTrack?.stop()
         audioTrack?.release()
         audioTrack = null
+        playing = false
+        queuedBytes = 0
     }
 }

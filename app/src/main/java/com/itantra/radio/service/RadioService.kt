@@ -8,6 +8,7 @@ import android.content.Intent
 import android.os.Binder
 import android.os.Build
 import android.os.IBinder
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.itantra.radio.R
 import com.itantra.radio.audio.AudioCapturer
@@ -49,6 +50,8 @@ import kotlinx.coroutines.launch
 private const val CHANNEL_ID = "itantra_radio"
 private const val NOTIFICATION_ID = 1
 private const val PEER_SILENCE_TIMEOUT_MS = 500L
+private const val LOG_TAG = "RadioService"
+private const val LOG_EVERY_N_FRAMES = 50
 
 enum class RadioLink { WIFI_DIRECT, BLUETOOTH_CLASSIC }
 
@@ -67,7 +70,7 @@ class RadioService : Service() {
     private val audioCapturer = AudioCapturer()
     private val audioPlayer = AudioPlayer()
     private val vad = WebRtcVoiceActivityDetector()
-    private var wasSpeaking = false
+    @Volatile private var wasSpeaking = false
 
     private val _transport = MutableStateFlow<Transport?>(null)
     val transportFlow: StateFlow<Transport?> = _transport.asStateFlow()
@@ -84,6 +87,11 @@ class RadioService : Service() {
     private val _alertMode = MutableStateFlow(false)
     val alertModeFlow: StateFlow<Boolean> = _alertMode.asStateFlow()
 
+    private val _voiceStatus = MutableStateFlow("")
+    val voiceStatusFlow: StateFlow<String> = _voiceStatus.asStateFlow()
+    private var sttLabel = "loading"
+    private var ttsLabel = "system voice"
+
     private var sttEngine: SttEngine? = null
     private var ttsEngine: TtsEngine? = null
 
@@ -91,6 +99,8 @@ class RadioService : Service() {
     private var receiveJob: Job? = null
     private var watchdogJob: Job? = null
     private var lastPeerFrameAtMs = 0L
+    private var audioFramesSent = 0L
+    private var audioFramesReceived = 0L
 
     override fun onCreate() {
         super.onCreate()
@@ -148,6 +158,9 @@ class RadioService : Service() {
 
         sttEngine?.stop()
         sttEngine = null
+        sttLabel = "loading"
+        ttsLabel = "system voice"
+        refreshVoiceStatus(language)
 
         ttsEngine?.stop()
         ttsEngine = AndroidSystemTtsEngine(applicationContext, language.ttsLocale, language.code)
@@ -155,16 +168,29 @@ class RadioService : Service() {
         serviceScope.launch(Dispatchers.IO) {
             loadSttEngine(language)
             upgradeToNeuralTts(language)
+            refreshVoiceStatus(language)
+        }
+    }
+
+    private fun refreshVoiceStatus(language: SupportedLanguage) {
+        if (_language.value != language) return
+        _voiceStatus.value = when (sttLabel) {
+            "loading" -> "Loading ${language.displayName} speech models, please wait..."
+            "unavailable" -> "${language.displayName}: speech recognizer unavailable, voice: $ttsLabel"
+            else -> "${language.displayName} ready - recognizer: $sttLabel, voice: $ttsLabel"
         }
     }
 
     private fun loadSttEngine(language: SupportedLanguage) {
         if (language == SupportedLanguage.HINDI) {
-            val engine = runCatching { IndicConformerSttEngine(applicationContext, language.code) }.getOrNull()
+            val engine = runCatching { IndicConformerSttEngine(applicationContext, language.code) }
+                .onFailure { Log.e(LOG_TAG, "IndicConformer failed, falling back to Vosk", it) }
+                .getOrNull()
             if (engine != null) {
                 engine.setOnResult { text -> onRecognizedText(text) }
                 engine.start()
                 sttEngine = engine
+                sttLabel = "neural (IndicConformer)"
                 return
             }
         }
@@ -177,15 +203,21 @@ class RadioService : Service() {
                 engine.setOnResult { text -> onRecognizedText(text) }
                 engine.start()
                 sttEngine = engine
+                sttLabel = "basic (Vosk)"
             },
-            onError = { },
+            onError = {
+                Log.e(LOG_TAG, "Vosk model failed to load")
+                sttLabel = "unavailable"
+            },
         )
     }
 
     private fun buildNeuralTts(language: SupportedLanguage): TtsEngine? {
         if (language != SupportedLanguage.HINDI) return null
         if (PiperAssetProvisioner.isBundled(applicationContext, language.code)) {
-            val piper = runCatching { PiperTtsEngine(applicationContext, language.code) }.getOrNull()
+            val piper = runCatching { PiperTtsEngine(applicationContext, language.code) }
+                .onFailure { Log.e(LOG_TAG, "Piper failed to load", it) }
+                .getOrNull()
             if (piper != null) return piper
         }
         if (IndicTtsAssetProvisioner.isBundled(applicationContext, language.code)) {
@@ -202,6 +234,7 @@ class RadioService : Service() {
         }
         val previous = ttsEngine
         ttsEngine = neural
+        ttsLabel = if (neural is PiperTtsEngine) "neural (Piper)" else "neural (FastPitch)"
         previous?.stop()
     }
 
@@ -220,16 +253,32 @@ class RadioService : Service() {
     private fun stopCapture() {
         captureJob?.cancel()
         captureJob = null
+        finishPendingUtterance()
+    }
+
+    private fun finishPendingUtterance() {
+        if (_transmissionMode.value != TransmissionMode.VOICE_TEXT || !wasSpeaking) return
+        wasSpeaking = false
+        val engine = sttEngine ?: return
+        serviceScope.launch(Dispatchers.Default) {
+            Log.d(LOG_TAG, "ptt released while speaking, finishing utterance")
+            engine.endUtterance()
+        }
     }
 
     private fun handleCapturedFrame(transport: Transport, frame: ByteArray) {
         when (_transmissionMode.value) {
-            TransmissionMode.RAW_AUDIO -> transport.send(RadioFrameCodec.encode(RadioFrame.Audio(frame)))
+            TransmissionMode.RAW_AUDIO -> {
+                transport.send(RadioFrameCodec.encode(RadioFrame.Audio(frame)))
+                if (++audioFramesSent % LOG_EVERY_N_FRAMES == 0L) Log.d(LOG_TAG, "tx audio frames=$audioFramesSent")
+            }
             TransmissionMode.VOICE_TEXT -> {
                 val speaking = vad.isSpeech(frame)
                 if (speaking) {
+                    if (!wasSpeaking) Log.d(LOG_TAG, "vad speech start, stt engine ready=${sttEngine != null}")
                     sttEngine?.acceptAudioFrame(frame)
                 } else if (wasSpeaking) {
+                    Log.d(LOG_TAG, "vad speech end, finishing utterance")
                     sttEngine?.endUtterance()
                 }
                 wasSpeaking = speaking
@@ -239,6 +288,7 @@ class RadioService : Service() {
 
     private fun onRecognizedText(text: String) {
         _recognizedText.value = text
+        Log.d(LOG_TAG, "stt result chars=${text.length} alert=${_alertMode.value}")
         _transport.value?.send(RadioFrameCodec.encode(RadioFrame.Text(text, isAlert = _alertMode.value)))
     }
 
@@ -252,8 +302,14 @@ class RadioService : Service() {
                 lastPeerFrameAtMs = System.currentTimeMillis()
                 pttController.onPeerTransmitting(true)
                 when (val frame = RadioFrameCodec.decode(bytes)) {
-                    is RadioFrame.Audio -> audioPlayer.playFrame(frame.pcm)
-                    is RadioFrame.Text -> ttsEngine?.speak(frame.text, frame.isAlert)
+                    is RadioFrame.Audio -> {
+                        audioPlayer.playFrame(frame.pcm)
+                        if (++audioFramesReceived % LOG_EVERY_N_FRAMES == 0L) Log.d(LOG_TAG, "rx audio frames=$audioFramesReceived")
+                    }
+                    is RadioFrame.Text -> {
+                        Log.d(LOG_TAG, "rx text alert=${frame.isAlert} chars=${frame.text.length}")
+                        ttsEngine?.speak(frame.text, frame.isAlert)
+                    }
                     null -> Unit
                 }
             }
@@ -264,6 +320,7 @@ class RadioService : Service() {
                 delay(200)
                 if (lastPeerFrameAtMs != 0L && System.currentTimeMillis() - lastPeerFrameAtMs > PEER_SILENCE_TIMEOUT_MS) {
                     pttController.onPeerTransmitting(false)
+                    audioPlayer.endOfBurst()
                     lastPeerFrameAtMs = 0L
                 }
             }
