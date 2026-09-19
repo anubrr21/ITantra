@@ -1,6 +1,7 @@
 package com.itantra.radio.tts
 
 import android.content.Context
+import com.itantra.radio.assets.AssetTreeCopier
 import java.io.File
 
 object PiperAssetProvisioner {
@@ -30,29 +31,9 @@ object PiperAssetProvisioner {
         if (!upToDate) {
             marker.delete()
             files.espeakData.deleteRecursively()
-            copyAssetTree(context, "$ASSET_ROOT/$languageCode", outputDir)
+            AssetTreeCopier.copy(context, "$ASSET_ROOT/$languageCode", outputDir)
             marker.writeText(ASSET_VERSION)
         }
         return files
-    }
-
-    private fun copyAssetTree(context: Context, assetPath: String, target: File) {
-        val children = context.assets.list(assetPath).orEmpty()
-        target.mkdirs()
-        for (child in children) {
-            val childAsset = "$assetPath/$child"
-            val childTarget = File(target, child)
-            val grandChildren = context.assets.list(childAsset).orEmpty()
-            if (grandChildren.isNotEmpty()) {
-                copyAssetTree(context, childAsset, childTarget)
-            } else {
-                val partial = File(target, "$child.partial")
-                context.assets.open(childAsset).use { input ->
-                    partial.outputStream().use { output -> input.copyTo(output) }
-                }
-                childTarget.delete()
-                check(partial.renameTo(childTarget)) { "could not finalise $childAsset" }
-            }
-        }
     }
 }

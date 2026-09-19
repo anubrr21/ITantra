@@ -263,7 +263,28 @@ single-device testing could not reveal:
   installed by copying the APK with `adb push` and installing from the file manager
   (choose "Open with -> Package installer"; WPS Office had claimed the APK type).
 
+- **WiFi Direct host did nothing.** `becomeHost()` only registered a listener. It now removes
+  any stale group and calls `createGroup()`, and the joining phone passes
+  `groupOwnerIntent = 0` so the host stays group owner.
+- **Duplicate link start.** WiFi Direct fires several connection-changed broadcasts as a group
+  forms, and each started another host server on the same port; the second failed with
+  "address in use" and overwrote the screen with "Failed". A single-start guard
+  (`linkStarted`) fixes it; each step now logs.
+- **Missing `INTERNET` permission.** WiFi Direct sockets failed with `EPERM (Operation not
+  permitted)` because the manifest never declared `INTERNET` (needed for any socket, even
+  local). Bluetooth sockets do not need it, which is why only Bluetooth worked before.
+  Connection between the two phones then took ~30ms.
+- **Vosk (English and Hindi small models) never loaded on a device.** The helper
+  `StorageService.unpack` needs a `uuid` file the bundled model folders do not have, and
+  both languages unpacked to the same `model` directory; `RadioService` swallowed the
+  failure. Replaced with `VoskModelProvisioner` (copies to `filesDir/vosk/<folder>`, marker
+  file) on a shared `AssetTreeCopier`. On-device check with the user's own recordings:
+  English "send help immediately" exact, "we are trapped near the bridge" heard as "the are
+  trapped near debris"; Hindi 2 of 3 acceptable (the small Vosk Hindi model misses
+  "मदद भेजो अभी", which is why Hindi uses IndicConformer).
+
 Verified end to end: Hindi spoken into phone 1 is recognized by IndicConformer, sent as
 text over Bluetooth and spoken by Piper (pratham) on phone 2; raw push-to-talk audio is
-smooth; user-measured speech-end to speech-start delay is roughly 2-3 seconds. Still to
-verify: the alert path across two phones, WiFi Direct between two phones, and phone mode.
+smooth; user-measured speech-end to speech-start delay is roughly 2-3 seconds. WiFi Direct between the two phones
+also works: raw audio, Hindi text and alerts were received. Still to verify: phone mode
+(full duplex) and English voice -> text -> voice across the two phones.

@@ -22,6 +22,7 @@ import java.io.IOException
 import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
+import java.util.concurrent.atomic.AtomicBoolean
 
 private const val TAG = "WifiDirectTransport"
 private const val PORT = 8988
@@ -42,6 +43,7 @@ class WifiDirectTransport(
     private val incoming = Channel<ByteArray>(capacity = 64)
     private var socket: Socket? = null
     private var writer: SerialFrameWriter? = null
+    private val linkStarted = AtomicBoolean(false)
     private var serverSocket: ServerSocket? = null
     private var discoveredDevices: Map<String, WifiP2pDevice> = emptyMap()
     private var isRegistered = false
@@ -59,7 +61,8 @@ class WifiDirectTransport(
                 }
                 WifiP2pManager.WIFI_P2P_CONNECTION_CHANGED_ACTION -> {
                     manager.requestConnectionInfo(channel) { info ->
-                        if (info.groupFormed && socket == null) {
+                        Log.d(TAG, "connection info: groupFormed=${info.groupFormed} owner=${info.isGroupOwner} address=${info.groupOwnerAddress?.hostAddress}")
+                        if (info.groupFormed && socket == null && linkStarted.compareAndSet(false, true)) {
                             scope.launch(Dispatchers.IO) {
                                 if (info.isGroupOwner) runAsHost() else runAsClient(info.groupOwnerAddress.hostAddress!!)
                             }
@@ -103,6 +106,29 @@ class WifiDirectTransport(
 
     override fun becomeHost() {
         register()
+        _state.value = TransportState.Discovering
+        manager.removeGroup(
+            channel,
+            object : WifiP2pManager.ActionListener {
+                override fun onSuccess() = createHostGroup()
+                override fun onFailure(reason: Int) = createHostGroup()
+            },
+        )
+    }
+
+    private fun createHostGroup() {
+        manager.createGroup(
+            channel,
+            object : WifiP2pManager.ActionListener {
+                override fun onSuccess() {
+                    Log.d(TAG, "Host group created, waiting for a peer")
+                }
+
+                override fun onFailure(reason: Int) {
+                    _state.value = TransportState.Failed("WiFi Direct host failed: ${describeFailure(reason)}")
+                }
+            },
+        )
     }
 
     override fun connectTo(peer: TransportPeer) {
@@ -110,7 +136,10 @@ class WifiDirectTransport(
             _state.value = TransportState.Failed("Unknown peer ${peer.id}")
             return
         }
-        val config = WifiP2pConfig().apply { deviceAddress = device.deviceAddress }
+        val config = WifiP2pConfig().apply {
+            deviceAddress = device.deviceAddress
+            groupOwnerIntent = 0
+        }
         _state.value = TransportState.Connecting
         manager.connect(channel, config, object : WifiP2pManager.ActionListener {
             override fun onSuccess() { Log.d(TAG, "Connect requested") }
@@ -132,7 +161,9 @@ class WifiDirectTransport(
         try {
             val server = ServerSocket(PORT)
             serverSocket = server
+            Log.d(TAG, "host listening on port $PORT")
             val client = server.accept()
+            Log.d(TAG, "host accepted a peer")
             socket = client
             openWriter(client)
             _state.value = TransportState.Connected(
@@ -140,6 +171,8 @@ class WifiDirectTransport(
             )
             listenLoop(client)
         } catch (e: IOException) {
+            Log.e(TAG, "host socket error", e)
+            linkStarted.set(false)
             _state.value = TransportState.Failed("WiFi Direct host socket error: ${e.message}")
         }
     }
@@ -147,12 +180,16 @@ class WifiDirectTransport(
     private fun runAsClient(hostAddress: String) {
         try {
             val client = Socket()
+            Log.d(TAG, "client connecting to $hostAddress:$PORT")
             client.connect(InetSocketAddress(hostAddress, PORT), CONNECT_TIMEOUT_MS)
+            Log.d(TAG, "client connected")
             socket = client
             openWriter(client)
             _state.value = TransportState.Connected(TransportPeer(hostAddress, "Host"))
             listenLoop(client)
         } catch (e: IOException) {
+            Log.e(TAG, "client socket error", e)
+            linkStarted.set(false)
             _state.value = TransportState.Failed("WiFi Direct client socket error: ${e.message}")
         }
     }
@@ -187,6 +224,7 @@ class WifiDirectTransport(
     override fun incomingFrames(): Flow<ByteArray> = incoming.receiveAsFlow()
 
     override fun disconnect() {
+        linkStarted.set(false)
         writer?.close()
         writer = null
         runCatching { socket?.close() }
