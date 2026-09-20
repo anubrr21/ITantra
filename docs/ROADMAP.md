@@ -289,6 +289,10 @@ single-device testing could not reveal:
   the app (reproduced on the phone by `VoskConcurrencyDeviceTest`, which crashed the process
   before the fix and passes after). Both STT engines are now thread-safe (one lock around
   every recognizer/session/buffer access) and late frames after a release are ignored.
+- **English recognition upgraded to Whisper base** (Vosk small scored 71% WER on the user's
+  voice; Whisper base 12.5% on the laptop and 8.9% on the phone at ~0.9s per sentence). Details
+  and the benchmark table are in MODEL_NOTES.md. The English status line now reads
+  "recognizer: neural (Whisper)".
 Verified end to end: Hindi spoken into phone 1 is recognized by IndicConformer, sent as
 text over Bluetooth and spoken by Piper (pratham) on phone 2; raw push-to-talk audio is
 smooth; user-measured speech-end to speech-start delay is roughly 2-3 seconds. WiFi Direct between the two phones

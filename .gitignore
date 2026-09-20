@@ -50,3 +50,5 @@ ml/tts/piper/
 
 # English STT candidate models (benchmark only; see docs/MODEL_NOTES.md)
 ml/stt/english_models/
+
+app/src/main/assets/whisper_stt/

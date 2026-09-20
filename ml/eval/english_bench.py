@@ -1,4 +1,5 @@
 import json
+import os
 import sys
 import time
 import zipfile
@@ -112,6 +113,10 @@ def main():
         total_time = 0.0
         print(f"== {name}")
         for clip_name, samples, reference in clips:
+            if os.environ.get("NORMALIZE"):
+                peak = float(np.abs(samples).max())
+                if peak > 0:
+                    samples = (samples / peak * float(os.environ["NORMALIZE"])).astype(np.float32)
             start = time.perf_counter()
             heard = transcribe(samples)
             total_time += time.perf_counter() - start

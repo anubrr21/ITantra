@@ -25,6 +25,8 @@ import com.itantra.radio.ptt.PttMode
 import com.itantra.radio.stt.IndicConformerSttEngine
 import com.itantra.radio.stt.SttEngine
 import com.itantra.radio.stt.VoskModelProvisioner
+import com.itantra.radio.stt.WhisperAssetProvisioner
+import com.itantra.radio.stt.WhisperSttEngine
 import com.itantra.radio.stt.VoskSttEngine
 import com.itantra.radio.tts.AndroidSystemTtsEngine
 import com.itantra.radio.tts.IndicTtsAssetProvisioner
@@ -182,6 +184,19 @@ class RadioService : Service() {
     }
 
     private fun loadSttEngine(language: SupportedLanguage) {
+        if (language == SupportedLanguage.ENGLISH && WhisperAssetProvisioner.isBundled(applicationContext, language.code)) {
+            val engine = runCatching { WhisperSttEngine(applicationContext, language.code) }
+                .onFailure { Log.e(LOG_TAG, "Whisper failed, falling back to Vosk", it) }
+                .getOrNull()
+            if (engine != null) {
+                engine.setOnResult { text -> onRecognizedText(text) }
+                engine.start()
+                sttEngine = engine
+                sttLabel = "neural (Whisper)"
+                return
+            }
+        }
+
         if (language == SupportedLanguage.HINDI) {
             val engine = runCatching { IndicConformerSttEngine(applicationContext, language.code) }
                 .onFailure { Log.e(LOG_TAG, "IndicConformer failed, falling back to Vosk", it) }

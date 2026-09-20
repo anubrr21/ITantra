@@ -282,3 +282,26 @@ VITS architecture, not new data.
 - **Quantization:** FastPitch int8 (MatMul only) saved 37MB and shifted predicted
   durations; not shipped. HiFiGAN is conv-only and stays fp32 (ConvInteger is not
   supported on ORT CPU).
+
+## English speech recognition: Whisper base replaces Vosk small (2026-09-20)
+
+Vosk's small en-us model was weak on the user's Indian-accented English in live use ("what's your
+name" heard as "know your name"). Benchmarked on 10 of the user's own recordings
+(`ml/eval/english_bench.py`; recordings are private and git-ignored, transcripts are in
+`ml/eval/manifest.tsv`):
+
+| Model | WER | Decode time, 10 clips (laptop) |
+|---|---|---|
+| Vosk small en-us (previous) | 71.4% | 13.8s |
+| Vosk small en-in | 83.9% (51.8% after volume normalization) | 6.7s |
+| Whisper tiny.en int8 | 26.8% | 3.4s |
+| **Whisper base.en int8 (chosen)** | **12.5%** | 6.2s |
+
+On the phone (Redmi A7 Pro 5G, 4GB) the same 10 clips gave **8.9% WER at ~0.9s per utterance**,
+model load 2.4s. Runs through the sherpa-onnx `OfflineRecognizer` already bundled for Piper, so
+there is no new native library; assets are ~161MB (encoder 29MB + decoder 131MB int8) under
+`assets/whisper_stt/en/`, staged with `ml/stt/stage_whisper_assets.py base.en`. Vosk stays as
+the fallback. Whisper emits non-speech markers such as "[ Silence ]" and "(buzzer)", which
+`SttTextFilter` drops. Caveat: 10 clips from one speaker is a small test; it is a strong signal
+against Vosk, not a general accuracy claim.
+

@@ -2,11 +2,13 @@ import csv
 import time
 from pathlib import Path
 
+import numpy as np
 import sounddevice as sd
 import soundfile as sf
 
 SAMPLE_RATE = 16000
 SECONDS = 5
+MIN_PEAK = 0.01
 REPO_ROOT = Path(__file__).resolve().parents[2]
 TESTSET = REPO_ROOT / "ml" / "eval" / "testset"
 MANIFEST = REPO_ROOT / "ml" / "eval" / "manifest.tsv"
@@ -42,6 +44,12 @@ def main():
         print("  SPEAK NOW")
         audio = sd.rec(int(SECONDS * SAMPLE_RATE), samplerate=SAMPLE_RATE, channels=1, dtype="int16")
         sd.wait()
+        peak = float(np.abs(audio.astype(np.float32) / 32768.0).max())
+        if peak < MIN_PEAK:
+            print(f"  NOTHING WAS RECORDED (volume {peak:.4f}). The microphone is muted or blocked.")
+            print("  Fix: unmute the mic, and in Windows Settings > Privacy & security > Microphone")
+            print("  turn on 'Let desktop apps access your microphone'. Then run this script again.")
+            raise SystemExit(1)
         name = f"en_{index:03d}.wav"
         sf.write(TESTSET / name, audio, SAMPLE_RATE, subtype="PCM_16")
         with open(MANIFEST, "a", newline="", encoding="utf-8") as f:

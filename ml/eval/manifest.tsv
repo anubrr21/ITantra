@@ -4,3 +4,11 @@ ml/eval/testset/hi_002.wav	hi	मैं ठीक हूँ
 ml/eval/testset/hi_003.wav	hi	पानी खत्म हो गया है जल्दी आओ
 ml/eval/testset/en_001.wav	en	send help immediately
 ml/eval/testset/en_002.wav	en	we are trapped near the bridge
+ml/eval/testset/en_003.wav	en	what is your name
+ml/eval/testset/en_004.wav	en	we need water and food
+ml/eval/testset/en_005.wav	en	the road is blocked by a fallen tree
+ml/eval/testset/en_006.wav	en	there are three injured people here
+ml/eval/testset/en_007.wav	en	please send a doctor to the school
+ml/eval/testset/en_008.wav	en	my phone battery is almost finished
+ml/eval/testset/en_009.wav	en	the flood water is rising fast
+ml/eval/testset/en_010.wav	en	call the rescue team immediately
