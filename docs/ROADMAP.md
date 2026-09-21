@@ -293,6 +293,15 @@ single-device testing could not reveal:
   voice; Whisper base 12.5% on the laptop and 8.9% on the phone at ~0.9s per sentence). Details
   and the benchmark table are in MODEL_NOTES.md. The English status line now reads
   "recognizer: neural (Whisper)".
+- **Messages now carry their language; sentence splitting uses a pause hangover.** The receiver
+  used to speak everything with whatever language *it* had selected, so English text read by a
+  phone left on Hindi came out as gibberish. New frame tags 3 (text + language) and 4 (alert +
+  language) carry the sender's language code; the old tags 1 and 2 are unchanged and still
+  decode. `LanguageVoices` keeps one voice per language (system voice immediately, Piper for
+  Hindi loaded on demand) so each message is spoken in the language it was said in. This is not
+  translation (still Phase 9). Segmentation: an utterance ends after ~0.8s of silence, when the
+  button is released, or after 28s, replacing both "cut at every pause" (fragments) and "one
+  sentence per press" (9-17s latency with the Hindi recognizer on long presses).
 Verified end to end: Hindi spoken into phone 1 is recognized by IndicConformer, sent as
 text over Bluetooth and spoken by Piper (pratham) on phone 2; raw push-to-talk audio is
 smooth; user-measured speech-end to speech-start delay is roughly 2-3 seconds. WiFi Direct between the two phones

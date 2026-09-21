@@ -9,5 +9,9 @@ enum class SupportedLanguage(
     val voskAssetFolder: String,
 ) {
     ENGLISH("English", "en", Locale.US, "model-en-us"),
-    HINDI("Hindi", "hi", Locale("hi", "IN"), "model-hi"),
+    HINDI("Hindi", "hi", Locale("hi", "IN"), "model-hi");
+
+    companion object {
+        fun fromCode(code: String?): SupportedLanguage? = entries.firstOrNull { it.code == code }
+    }
 }

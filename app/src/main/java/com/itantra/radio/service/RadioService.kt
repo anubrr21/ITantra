@@ -28,12 +28,7 @@ import com.itantra.radio.stt.VoskModelProvisioner
 import com.itantra.radio.stt.WhisperAssetProvisioner
 import com.itantra.radio.stt.WhisperSttEngine
 import com.itantra.radio.stt.VoskSttEngine
-import com.itantra.radio.tts.AndroidSystemTtsEngine
-import com.itantra.radio.tts.IndicTtsAssetProvisioner
-import com.itantra.radio.tts.IndicTtsEngine
-import com.itantra.radio.tts.PiperAssetProvisioner
-import com.itantra.radio.tts.PiperTtsEngine
-import com.itantra.radio.tts.TtsEngine
+import com.itantra.radio.tts.LanguageVoices
 import com.itantra.radio.vad.WebRtcVoiceActivityDetector
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -54,6 +49,9 @@ private const val NOTIFICATION_ID = 1
 private const val PEER_SILENCE_TIMEOUT_MS = 500L
 private const val LOG_TAG = "RadioService"
 private const val LOG_EVERY_N_FRAMES = 50
+private const val MAX_SEGMENT_FRAMES = 1_400
+private const val HANGOVER_FRAMES = 40
+private const val MAX_LEADING_SILENCE_FRAMES = 250
 
 enum class RadioLink { WIFI_DIRECT, BLUETOOTH_CLASSIC }
 
@@ -72,7 +70,9 @@ class RadioService : Service() {
     private val audioCapturer = AudioCapturer()
     private val audioPlayer = AudioPlayer()
     private val vad = WebRtcVoiceActivityDetector()
-    @Volatile private var wasSpeaking = false
+    @Volatile private var segmentHasSpeech = false
+    @Volatile private var silentRun = 0
+    @Volatile private var segmentFrames = 0
 
     private val _transport = MutableStateFlow<Transport?>(null)
     val transportFlow: StateFlow<Transport?> = _transport.asStateFlow()
@@ -92,10 +92,9 @@ class RadioService : Service() {
     private val _voiceStatus = MutableStateFlow("")
     val voiceStatusFlow: StateFlow<String> = _voiceStatus.asStateFlow()
     private var sttLabel = "loading"
-    private var ttsLabel = "system voice"
 
     private var sttEngine: SttEngine? = null
-    private var ttsEngine: TtsEngine? = null
+    private lateinit var voices: LanguageVoices
 
     private var captureJob: Job? = null
     private var receiveJob: Job? = null
@@ -107,6 +106,7 @@ class RadioService : Service() {
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
+        voices = LanguageVoices(applicationContext, serviceScope) { language -> refreshVoiceStatus(language) }
         setLanguage(SupportedLanguage.ENGLISH)
     }
 
@@ -148,7 +148,7 @@ class RadioService : Service() {
 
     fun setTransmissionMode(mode: TransmissionMode) {
         _transmissionMode.value = mode
-        wasSpeaking = false
+        resetSegment()
     }
 
     fun setAlertMode(enabled: Boolean) {
@@ -161,15 +161,12 @@ class RadioService : Service() {
         sttEngine?.stop()
         sttEngine = null
         sttLabel = "loading"
-        ttsLabel = "system voice"
+        resetSegment()
         refreshVoiceStatus(language)
-
-        ttsEngine?.stop()
-        ttsEngine = AndroidSystemTtsEngine(applicationContext, language.ttsLocale, language.code)
 
         serviceScope.launch(Dispatchers.IO) {
             loadSttEngine(language)
-            upgradeToNeuralTts(language)
+            voices.prepare(language)
             refreshVoiceStatus(language)
         }
     }
@@ -178,8 +175,8 @@ class RadioService : Service() {
         if (_language.value != language) return
         _voiceStatus.value = when (sttLabel) {
             "loading" -> "Loading ${language.displayName} speech models, please wait..."
-            "unavailable" -> "${language.displayName}: speech recognizer unavailable, voice: $ttsLabel"
-            else -> "${language.displayName} ready - recognizer: $sttLabel, voice: $ttsLabel"
+            "unavailable" -> "${language.displayName}: speech recognizer unavailable, voice: ${voices.label(language)}"
+            else -> "${language.displayName} ready - recognizer: $sttLabel, voice: ${voices.label(language)}"
         }
     }
 
@@ -227,32 +224,6 @@ class RadioService : Service() {
         )
     }
 
-    private fun buildNeuralTts(language: SupportedLanguage): TtsEngine? {
-        if (language != SupportedLanguage.HINDI) return null
-        if (PiperAssetProvisioner.isBundled(applicationContext, language.code)) {
-            val piper = runCatching { PiperTtsEngine(applicationContext, language.code) }
-                .onFailure { Log.e(LOG_TAG, "Piper failed to load", it) }
-                .getOrNull()
-            if (piper != null) return piper
-        }
-        if (IndicTtsAssetProvisioner.isBundled(applicationContext, language.code)) {
-            return runCatching { IndicTtsEngine(applicationContext, language.code) }.getOrNull()
-        }
-        return null
-    }
-
-    private fun upgradeToNeuralTts(language: SupportedLanguage) {
-        val neural = buildNeuralTts(language) ?: return
-        if (_language.value != language) {
-            neural.stop()
-            return
-        }
-        val previous = ttsEngine
-        ttsEngine = neural
-        ttsLabel = if (neural is PiperTtsEngine) "neural (Piper)" else "neural (FastPitch)"
-        previous?.stop()
-    }
-
     private fun applyCaptureState() {
         if (pttController.shouldCaptureMic) startCapture() else stopCapture()
     }
@@ -271,14 +242,45 @@ class RadioService : Service() {
         finishPendingUtterance()
     }
 
-    private fun finishPendingUtterance() {
-        if (_transmissionMode.value != TransmissionMode.VOICE_TEXT || !wasSpeaking) return
-        wasSpeaking = false
+    private fun resetSegment() {
+        segmentHasSpeech = false
+        silentRun = 0
+        segmentFrames = 0
+    }
+
+    private fun finishSegment() {
+        val heard = segmentHasSpeech
+        resetSegment()
         val engine = sttEngine ?: return
         serviceScope.launch(Dispatchers.Default) {
-            Log.d(LOG_TAG, "ptt released while speaking, finishing utterance")
-            engine.endUtterance()
+            if (heard) engine.endUtterance() else engine.start()
         }
+    }
+
+    private fun handleVoiceFrame(frame: ByteArray, speaking: Boolean) {
+        val pushToTalk = pttController.mode.value == PttMode.PUSH_TO_TALK
+        if (speaking) {
+            silentRun = 0
+            segmentHasSpeech = true
+        } else {
+            silentRun++
+        }
+        if (!pushToTalk && !segmentHasSpeech) return
+
+        sttEngine?.acceptAudioFrame(frame)
+        segmentFrames++
+        when {
+            segmentHasSpeech && silentRun >= HANGOVER_FRAMES -> finishSegment()
+            segmentFrames >= MAX_SEGMENT_FRAMES -> finishSegment()
+            !segmentHasSpeech && segmentFrames >= MAX_LEADING_SILENCE_FRAMES -> finishSegment()
+        }
+    }
+
+    private fun finishPendingUtterance() {
+        if (_transmissionMode.value != TransmissionMode.VOICE_TEXT) return
+        if (segmentFrames == 0 && !segmentHasSpeech) return
+        Log.d(LOG_TAG, "capture stopped, finishing the current sentence")
+        finishSegment()
     }
 
     private fun handleCapturedFrame(transport: Transport, frame: ByteArray) {
@@ -288,15 +290,7 @@ class RadioService : Service() {
                 if (++audioFramesSent % LOG_EVERY_N_FRAMES == 0L) Log.d(LOG_TAG, "tx audio frames=$audioFramesSent")
             }
             TransmissionMode.VOICE_TEXT -> {
-                val speaking = vad.isSpeech(frame)
-                if (speaking) {
-                    if (!wasSpeaking) Log.d(LOG_TAG, "vad speech start, stt engine ready=${sttEngine != null}")
-                    sttEngine?.acceptAudioFrame(frame)
-                } else if (wasSpeaking) {
-                    Log.d(LOG_TAG, "vad speech end, finishing utterance")
-                    sttEngine?.endUtterance()
-                }
-                wasSpeaking = speaking
+                handleVoiceFrame(frame, vad.isSpeech(frame))
             }
         }
     }
@@ -304,7 +298,8 @@ class RadioService : Service() {
     private fun onRecognizedText(text: String) {
         _recognizedText.value = text
         Log.d(LOG_TAG, "stt result chars=${text.length} alert=${_alertMode.value}")
-        _transport.value?.send(RadioFrameCodec.encode(RadioFrame.Text(text, isAlert = _alertMode.value)))
+        val message = RadioFrame.Text(text, isAlert = _alertMode.value, languageCode = _language.value.code)
+        _transport.value?.send(RadioFrameCodec.encode(message))
     }
 
     private fun listenForIncomingAudio(transport: Transport) {
@@ -322,8 +317,9 @@ class RadioService : Service() {
                         if (++audioFramesReceived % LOG_EVERY_N_FRAMES == 0L) Log.d(LOG_TAG, "rx audio frames=$audioFramesReceived")
                     }
                     is RadioFrame.Text -> {
-                        Log.d(LOG_TAG, "rx text alert=${frame.isAlert} chars=${frame.text.length}")
-                        ttsEngine?.speak(frame.text, frame.isAlert)
+                        val spoken = SupportedLanguage.fromCode(frame.languageCode) ?: _language.value
+                        Log.d(LOG_TAG, "rx text alert=${frame.isAlert} chars=${frame.text.length} language=${spoken.code}")
+                        voices.speak(spoken, frame.text, frame.isAlert)
                     }
                     null -> Unit
                 }
@@ -349,7 +345,7 @@ class RadioService : Service() {
         audioPlayer.stop()
         vad.close()
         sttEngine?.stop()
-        ttsEngine?.stop()
+        voices.stopAll()
         _transport.value?.disconnect()
         serviceScope.cancel()
         super.onDestroy()
