@@ -29,7 +29,9 @@ import com.itantra.radio.stt.VoskModelProvisioner
 import com.itantra.radio.stt.WhisperAssetProvisioner
 import com.itantra.radio.stt.WhisperSttEngine
 import com.itantra.radio.stt.VoskSttEngine
+import com.itantra.radio.time.ClockSync
 import com.itantra.radio.tts.LanguageVoices
+import com.itantra.radio.util.PendingTimestamps
 import com.itantra.radio.vad.WebRtcVoiceActivityDetector
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -44,6 +46,7 @@ import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 private const val CHANNEL_ID = "itantra_radio"
 private const val NOTIFICATION_ID = 1
@@ -58,6 +61,8 @@ private const val PEER_ECHO_TAIL_MS = 800L
 private const val PEER_SPEAKING_STALE_MS = 30_000L
 private const val MIN_SPEECH_FRAMES = 12
 private const val MIN_SEGMENT_PEAK = 1_600
+private const val PLAYBACK_START_TIMEOUT_MS = 8_000L
+private const val PLAYBACK_POLL_MS = 15L
 
 enum class RadioLink { WIFI_DIRECT, BLUETOOTH_CLASSIC }
 
@@ -105,6 +110,12 @@ class RadioService : Service() {
     private val _voiceStatus = MutableStateFlow("")
     val voiceStatusFlow: StateFlow<String> = _voiceStatus.asStateFlow()
     private var sttLabel = "loading"
+
+    private val _lastLatencyMs = MutableStateFlow<Long?>(null)
+    val lastLatencyMsFlow: StateFlow<Long?> = _lastLatencyMs.asStateFlow()
+
+    private val clockSync = ClockSync()
+    private val pendingSpeechEndTimestamps = PendingTimestamps()
 
     private var sttEngine: SttEngine? = null
     private lateinit var voices: LanguageVoices
@@ -317,6 +328,7 @@ class RadioService : Service() {
         }
         resetSegment()
         val engine = sttEngine ?: return
+        if (heard) pendingSpeechEndTimestamps.push(System.currentTimeMillis())
         serviceScope.launch(Dispatchers.Default) {
             if (heard) engine.endUtterance() else engine.start()
         }
@@ -377,10 +389,58 @@ class RadioService : Service() {
     private fun onRecognizedText(raw: String, language: SupportedLanguage) {
         val text = SttTextFilter.clean(raw)
         if (text.isEmpty()) return
+        val sentAtMs = System.currentTimeMillis()
+        val speechEndAtMs = pendingSpeechEndTimestamps.pollMatching(sentAtMs)
         _recognizedText.value = text
+        if (speechEndAtMs != null) {
+            Log.d(LOG_TAG, "LATENCY stt_ms=${sentAtMs - speechEndAtMs} lang=${language.code}")
+        }
         Log.d(LOG_TAG, "stt result chars=${text.length} alert=${_alertMode.value} text=\"$text\"")
-        val message = RadioFrame.Text(text, isAlert = _alertMode.value, languageCode = language.code)
+        val message = RadioFrame.Text(
+            text = text,
+            isAlert = _alertMode.value,
+            languageCode = language.code,
+            speechEndEpochMs = speechEndAtMs,
+            sentEpochMs = sentAtMs,
+        )
         _transport.value?.send(RadioFrameCodec.encode(message))
+    }
+
+    private fun computeReceivedLatency(frame: RadioFrame.Text, recvAtMs: Long): Long? {
+        val sentAtMs = frame.sentEpochMs ?: return null
+        val speechEndAtMs = frame.speechEndEpochMs ?: return null
+        val offset = clockSync.offsetMs
+        if (offset == null) {
+            Log.d(LOG_TAG, "LATENCY clock not yet synced (samples=${clockSync.sampleCount}), skipping this message")
+            return null
+        }
+        val sentAtLocalMs = sentAtMs - offset
+        val speechEndAtLocalMs = speechEndAtMs - offset
+        val sttMs = sentAtMs - speechEndAtMs
+        val networkMs = recvAtMs - sentAtLocalMs
+        Log.d(
+            LOG_TAG,
+            "LATENCY stt_ms=$sttMs network_ms=$networkMs lang=${frame.languageCode} " +
+                "(clock_samples=${clockSync.sampleCount} clock_rtt_ms=${clockSync.bestRttMs})",
+        )
+        return speechEndAtLocalMs
+    }
+
+    private fun trackPlaybackLatency(speechEndAtLocalMs: Long?) {
+        if (speechEndAtLocalMs == null) return
+        serviceScope.launch {
+            val startedAtMs = withTimeoutOrNull(PLAYBACK_START_TIMEOUT_MS) {
+                while (!voices.isPlaying()) delay(PLAYBACK_POLL_MS)
+                System.currentTimeMillis()
+            }
+            if (startedAtMs != null) {
+                val totalMs = startedAtMs - speechEndAtLocalMs
+                Log.d(LOG_TAG, "LATENCY total_ms=$totalMs (speech end on sender to speaker start on receiver)")
+                _lastLatencyMs.value = totalMs
+            } else {
+                Log.d(LOG_TAG, "LATENCY playback never started within ${PLAYBACK_START_TIMEOUT_MS}ms, dropping this sample")
+            }
+        }
     }
 
     private fun listenForIncomingAudio(transport: Transport) {
@@ -388,11 +448,15 @@ class RadioService : Service() {
         watchdogJob?.cancel()
         audioPlayer.start()
         startSpeakingSignals(transport)
+        clockSync.start(transport, serviceScope)
 
         receiveJob = transport.incomingFrames()
             .onEach { bytes ->
                 val decoded = RadioFrameCodec.decode(bytes)
-                if (decoded !is RadioFrame.PeerSpeaking) {
+                if (decoded !is RadioFrame.PeerSpeaking &&
+                    decoded !is RadioFrame.ClockSyncPing &&
+                    decoded !is RadioFrame.ClockSyncPong
+                ) {
                     lastPeerFrameAtMs = System.currentTimeMillis()
                     pttController.onPeerTransmitting(true)
                 }
@@ -405,8 +469,13 @@ class RadioService : Service() {
                     is RadioFrame.Text -> {
                         val spoken = SupportedLanguage.fromCode(frame.languageCode) ?: _language.value
                         Log.d(LOG_TAG, "rx text alert=${frame.isAlert} chars=${frame.text.length} language=${spoken.code} text=\"${frame.text}\"")
+                        val speechEndAtLocalMs = computeReceivedLatency(frame, System.currentTimeMillis())
                         voices.speak(spoken, frame.text, frame.isAlert)
+                        trackPlaybackLatency(speechEndAtLocalMs)
                     }
+                    is RadioFrame.ClockSyncPing ->
+                        transport.send(RadioFrameCodec.encode(RadioFrame.ClockSyncPong(frame.originEpochMs, System.currentTimeMillis())))
+                    is RadioFrame.ClockSyncPong -> clockSync.handlePong(frame)
                     null -> Unit
                 }
             }
@@ -429,6 +498,7 @@ class RadioService : Service() {
         receiveJob?.cancel()
         watchdogJob?.cancel()
         speakingSignalJob?.cancel()
+        clockSync.stop()
         audioPlayer.stop()
         vad.close()
         sttEngine?.stop()

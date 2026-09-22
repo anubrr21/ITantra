@@ -41,6 +41,7 @@ fun RadioScreen(service: RadioService) {
     val recognizedText by service.recognizedTextFlow.collectAsState()
     val alertMode by service.alertModeFlow.collectAsState()
     val voiceStatus by service.voiceStatusFlow.collectAsState()
+    val lastLatencyMs by service.lastLatencyMsFlow.collectAsState()
 
     Column(
         modifier = Modifier.fillMaxSize().padding(24.dp),
@@ -142,6 +143,14 @@ fun RadioScreen(service: RadioService) {
                     style = MaterialTheme.typography.bodyMedium,
                     textAlign = TextAlign.Center,
                 )
+                lastLatencyMs?.let { latency ->
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = "Last round-trip: %.1fs".format(latency / 1000.0),
+                        style = MaterialTheme.typography.bodySmall,
+                        textAlign = TextAlign.Center,
+                    )
+                }
             }
         }
     }
