@@ -22,6 +22,7 @@ class WhisperSttEngine(
     }
 
     private val files = WhisperAssetProvisioner.ensureFiles(context, languageCode)
+    private val recorder = UtteranceRecorder(context, "whisper")
 
     private val recognizer = OfflineRecognizer(
         config = OfflineRecognizerConfig(
@@ -68,6 +69,7 @@ class WhisperSttEngine(
         }
         val samples = FloatArray(pcm.size / 2)
         if (samples.size < MIN_UTTERANCE_SAMPLES) return
+        recorder.save(pcm)
         for (i in samples.indices) {
             val lo = pcm[i * 2].toInt() and 0xFF
             val hi = pcm[i * 2 + 1].toInt()

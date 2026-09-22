@@ -64,4 +64,13 @@ class RadioFrameCodecTest {
         assertNull(RadioFrameCodec.decode(byteArrayOf(99, 1, 2)))
         assertNull(RadioFrameCodec.decode(byteArrayOf(3, 'e'.code.toByte(), 'n'.code.toByte())))
     }
+
+    @Test
+    fun peerSpeakingSignalsRoundTrip() {
+        assertEquals(RadioFrame.PeerSpeaking(true), RadioFrameCodec.decode(RadioFrameCodec.encode(RadioFrame.PeerSpeaking(true))))
+        assertEquals(RadioFrame.PeerSpeaking(false), RadioFrameCodec.decode(RadioFrameCodec.encode(RadioFrame.PeerSpeaking(false))))
+        assertEquals(5.toByte(), RadioFrameCodec.encode(RadioFrame.PeerSpeaking(true))[0])
+        assertEquals(6.toByte(), RadioFrameCodec.encode(RadioFrame.PeerSpeaking(false))[0])
+    }
 }
+

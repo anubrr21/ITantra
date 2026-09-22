@@ -7,6 +7,7 @@ sealed interface RadioFrame {
         val isAlert: Boolean = false,
         val languageCode: String? = null,
     ) : RadioFrame
+    data class PeerSpeaking(val speaking: Boolean) : RadioFrame
 }
 
 object RadioFrameCodec {
@@ -15,12 +16,16 @@ object RadioFrameCodec {
     private const val TYPE_ALERT_TEXT: Byte = 2
     private const val TYPE_TEXT_WITH_LANGUAGE: Byte = 3
     private const val TYPE_ALERT_TEXT_WITH_LANGUAGE: Byte = 4
+    private const val TYPE_PEER_SPEAKING_STARTED: Byte = 5
+    private const val TYPE_PEER_SPEAKING_STOPPED: Byte = 6
     private const val LANGUAGE_TERMINATOR: Byte = 0
     private const val MAX_LANGUAGE_CODE_BYTES = 16
 
     fun encode(frame: RadioFrame): ByteArray = when (frame) {
         is RadioFrame.Audio -> byteArrayOf(TYPE_AUDIO) + frame.pcm
         is RadioFrame.Text -> encodeText(frame)
+        is RadioFrame.PeerSpeaking ->
+            byteArrayOf(if (frame.speaking) TYPE_PEER_SPEAKING_STARTED else TYPE_PEER_SPEAKING_STOPPED)
     }
 
     private fun encodeText(frame: RadioFrame.Text): ByteArray {
@@ -42,6 +47,8 @@ object RadioFrameCodec {
             TYPE_ALERT_TEXT -> RadioFrame.Text(String(payload, Charsets.UTF_8), isAlert = true)
             TYPE_TEXT_WITH_LANGUAGE -> decodeTextWithLanguage(payload, isAlert = false)
             TYPE_ALERT_TEXT_WITH_LANGUAGE -> decodeTextWithLanguage(payload, isAlert = true)
+            TYPE_PEER_SPEAKING_STARTED -> RadioFrame.PeerSpeaking(true)
+            TYPE_PEER_SPEAKING_STOPPED -> RadioFrame.PeerSpeaking(false)
             else -> null
         }
     }

@@ -60,6 +60,9 @@ class PiperTtsEngine(
         scheduler.enqueue(text, isAlert)
     }
 
+    override val isSpeaking: Boolean
+        get() = scheduler.isBusy()
+
     override fun stop() {
         val drained = scheduler.shutdown()
         volumeGuard.restore()

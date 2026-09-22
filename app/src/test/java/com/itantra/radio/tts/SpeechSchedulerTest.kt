@@ -220,4 +220,22 @@ class SpeechSchedulerTest {
         assertEquals(listOf("s1", "s2", "s3"), completed.toList())
         assertEquals(1, texts.count { it == "s2" })
     }
+
+    @Test
+    fun isBusyWhileMessagesArePlayingOrQueuedAndIdleAfterwards() {
+        val gate = CountDownLatch(1)
+        val started = CountDownLatch(1)
+        val s = build { _, _, _ ->
+            started.countDown()
+            gate.await(2, TimeUnit.SECONDS)
+            true
+        }
+        assertTrue(!s.isBusy())
+        s.enqueue("n1", false)
+        assertTrue(started.await(2, TimeUnit.SECONDS))
+        assertTrue(s.isBusy())
+        gate.countDown()
+        awaitTrue { completed.size == 1 }
+        awaitTrue { !s.isBusy() }
+    }
 }

@@ -51,6 +51,9 @@ class AndroidSystemTtsEngine(
         tts.speak(text, queueMode, params, utteranceId)
     }
 
+    override val isSpeaking: Boolean
+        get() = ready && runCatching { tts.isSpeaking }.getOrDefault(false)
+
     override fun stop() {
         tts.stop()
         tts.shutdown()

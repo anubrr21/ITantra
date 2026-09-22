@@ -24,6 +24,26 @@ class LanguageVoices(
         }
     }
 
+    @Volatile
+    private var lastCheckAtMs = 0L
+
+    @Volatile
+    private var lastSpeakingAtMs = 0L
+
+    @Volatile
+    private var lastResult = false
+
+    fun isPlaying(): Boolean = engines.values.any { runCatching { it.isSpeaking }.getOrDefault(false) }
+
+    fun isSpeaking(): Boolean {
+        val now = System.currentTimeMillis()
+        if (now - lastCheckAtMs < CHECK_INTERVAL_MS) return lastResult
+        lastCheckAtMs = now
+        if (engines.values.any { runCatching { it.isSpeaking }.getOrDefault(false) }) lastSpeakingAtMs = now
+        lastResult = lastSpeakingAtMs != 0L && now - lastSpeakingAtMs < ECHO_TAIL_MS
+        return lastResult
+    }
+
     fun label(language: SupportedLanguage): String = labels[language] ?: SYSTEM_LABEL
 
     fun prepare(language: SupportedLanguage) {
@@ -68,5 +88,7 @@ class LanguageVoices(
     private companion object {
         const val SYSTEM_LABEL = "system voice"
         const val LOG_TAG = "LanguageVoices"
+        const val CHECK_INTERVAL_MS = 100L
+        const val ECHO_TAIL_MS = 700L
     }
 }

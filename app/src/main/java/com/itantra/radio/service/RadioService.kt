@@ -24,6 +24,7 @@ import com.itantra.radio.ptt.PttController
 import com.itantra.radio.ptt.PttMode
 import com.itantra.radio.stt.IndicConformerSttEngine
 import com.itantra.radio.stt.SttEngine
+import com.itantra.radio.stt.SttTextFilter
 import com.itantra.radio.stt.VoskModelProvisioner
 import com.itantra.radio.stt.WhisperAssetProvisioner
 import com.itantra.radio.stt.WhisperSttEngine
@@ -52,6 +53,11 @@ private const val LOG_EVERY_N_FRAMES = 50
 private const val MAX_SEGMENT_FRAMES = 1_400
 private const val HANGOVER_FRAMES = 40
 private const val MAX_LEADING_SILENCE_FRAMES = 250
+private const val SPEAKING_POLL_MS = 100L
+private const val PEER_ECHO_TAIL_MS = 800L
+private const val PEER_SPEAKING_STALE_MS = 30_000L
+private const val MIN_SPEECH_FRAMES = 12
+private const val MIN_SEGMENT_PEAK = 1_600
 
 enum class RadioLink { WIFI_DIRECT, BLUETOOTH_CLASSIC }
 
@@ -73,6 +79,13 @@ class RadioService : Service() {
     @Volatile private var segmentHasSpeech = false
     @Volatile private var silentRun = 0
     @Volatile private var segmentFrames = 0
+    @Volatile private var segmentSpeechFrames = 0
+    @Volatile private var segmentPeak = 0
+    @Volatile private var loadGeneration = 0
+    @Volatile private var lastMicIgnored = false
+    @Volatile private var peerSpeaking = false
+    @Volatile private var peerSpeakingSignalAtMs = 0L
+    @Volatile private var peerStoppedAtMs = 0L
 
     private val _transport = MutableStateFlow<Transport?>(null)
     val transportFlow: StateFlow<Transport?> = _transport.asStateFlow()
@@ -99,6 +112,7 @@ class RadioService : Service() {
     private var captureJob: Job? = null
     private var receiveJob: Job? = null
     private var watchdogJob: Job? = null
+    private var speakingSignalJob: Job? = null
     private var lastPeerFrameAtMs = 0L
     private var audioFramesSent = 0L
     private var audioFramesReceived = 0L
@@ -156,6 +170,7 @@ class RadioService : Service() {
     }
 
     fun setLanguage(language: SupportedLanguage) {
+        val generation = ++loadGeneration
         _language.value = language
 
         sttEngine?.stop()
@@ -165,7 +180,8 @@ class RadioService : Service() {
         refreshVoiceStatus(language)
 
         serviceScope.launch(Dispatchers.IO) {
-            loadSttEngine(language)
+            loadSttEngine(language, generation)
+            if (generation != loadGeneration) return@launch
             voices.prepare(language)
             refreshVoiceStatus(language)
         }
@@ -180,16 +196,25 @@ class RadioService : Service() {
         }
     }
 
-    private fun loadSttEngine(language: SupportedLanguage) {
+    private fun installStt(engine: SttEngine, label: String, language: SupportedLanguage, generation: Int) {
+        if (generation != loadGeneration) {
+            Log.d(LOG_TAG, "discarding stale ${language.code} recognizer that finished loading late")
+            engine.stop()
+            return
+        }
+        engine.setOnResult { text -> onRecognizedText(text, language) }
+        engine.start()
+        sttEngine = engine
+        sttLabel = label
+    }
+
+    private fun loadSttEngine(language: SupportedLanguage, generation: Int) {
         if (language == SupportedLanguage.ENGLISH && WhisperAssetProvisioner.isBundled(applicationContext, language.code)) {
             val engine = runCatching { WhisperSttEngine(applicationContext, language.code) }
                 .onFailure { Log.e(LOG_TAG, "Whisper failed, falling back to Vosk", it) }
                 .getOrNull()
             if (engine != null) {
-                engine.setOnResult { text -> onRecognizedText(text) }
-                engine.start()
-                sttEngine = engine
-                sttLabel = "neural (Whisper)"
+                installStt(engine, "neural (Whisper)", language, generation)
                 return
             }
         }
@@ -199,10 +224,7 @@ class RadioService : Service() {
                 .onFailure { Log.e(LOG_TAG, "IndicConformer failed, falling back to Vosk", it) }
                 .getOrNull()
             if (engine != null) {
-                engine.setOnResult { text -> onRecognizedText(text) }
-                engine.start()
-                sttEngine = engine
-                sttLabel = "neural (IndicConformer)"
+                installStt(engine, "neural (IndicConformer)", language, generation)
                 return
             }
         }
@@ -210,16 +232,10 @@ class RadioService : Service() {
         VoskModelProvisioner.unpack(
             applicationContext,
             language.voskAssetFolder,
-            onReady = { model ->
-                val engine = VoskSttEngine(model, language.code)
-                engine.setOnResult { text -> onRecognizedText(text) }
-                engine.start()
-                sttEngine = engine
-                sttLabel = "basic (Vosk)"
-            },
+            onReady = { model -> installStt(VoskSttEngine(model, language.code), "basic (Vosk)", language, generation) },
             onError = {
                 Log.e(LOG_TAG, "Vosk model failed to load")
-                sttLabel = "unavailable"
+                if (generation == loadGeneration) sttLabel = "unavailable"
             },
         )
     }
@@ -242,14 +258,63 @@ class RadioService : Service() {
         finishPendingUtterance()
     }
 
+    private fun micShouldBeIgnored(): Boolean {
+        if (voices.isSpeaking()) return true
+        val now = System.currentTimeMillis()
+        if (peerSpeaking && now - peerSpeakingSignalAtMs < PEER_SPEAKING_STALE_MS) return true
+        return now - peerStoppedAtMs < PEER_ECHO_TAIL_MS
+    }
+
+    private fun onPeerSpeakingSignal(speaking: Boolean) {
+        Log.d(LOG_TAG, "peer speaking=$speaking")
+        val now = System.currentTimeMillis()
+        peerSpeaking = speaking
+        peerSpeakingSignalAtMs = now
+        if (!speaking) peerStoppedAtMs = now
+    }
+
+    private fun startSpeakingSignals(transport: Transport) {
+        speakingSignalJob?.cancel()
+        speakingSignalJob = serviceScope.launch {
+            var announced = false
+            while (isActive) {
+                val playing = voices.isPlaying()
+                if (playing != announced) {
+                    announced = playing
+                    transport.send(RadioFrameCodec.encode(RadioFrame.PeerSpeaking(playing)))
+                }
+                delay(SPEAKING_POLL_MS)
+            }
+        }
+    }
+
     private fun resetSegment() {
         segmentHasSpeech = false
         silentRun = 0
         segmentFrames = 0
+        segmentSpeechFrames = 0
+        segmentPeak = 0
+    }
+
+    private fun framePeak(frame: ByteArray): Int {
+        var peak = 0
+        var i = 0
+        while (i + 1 < frame.size) {
+            val sample = ((frame[i + 1].toInt() shl 8) or (frame[i].toInt() and 0xFF)).toShort().toInt()
+            val magnitude = if (sample < 0) -sample else sample
+            if (magnitude > peak) peak = magnitude
+            i += 2
+        }
+        return peak
     }
 
     private fun finishSegment() {
-        val heard = segmentHasSpeech
+        val speechFrames = segmentSpeechFrames
+        val peak = segmentPeak
+        val heard = segmentHasSpeech && speechFrames >= MIN_SPEECH_FRAMES && peak >= MIN_SEGMENT_PEAK
+        if (segmentHasSpeech && !heard) {
+            Log.d(LOG_TAG, "sound rejected as noise: speechFrames=$speechFrames peak=$peak")
+        }
         resetSegment()
         val engine = sttEngine ?: return
         serviceScope.launch(Dispatchers.Default) {
@@ -259,9 +324,21 @@ class RadioService : Service() {
 
     private fun handleVoiceFrame(frame: ByteArray, speaking: Boolean) {
         val pushToTalk = pttController.mode.value == PttMode.PUSH_TO_TALK
+        if (!pushToTalk) {
+            val ignored = micShouldBeIgnored()
+            if (ignored != lastMicIgnored) {
+                lastMicIgnored = ignored
+                Log.d(LOG_TAG, "microphone ignored=$ignored (someone is speaking)")
+            }
+            if (ignored) {
+                resetSegment()
+                return
+            }
+        }
         if (speaking) {
             silentRun = 0
             segmentHasSpeech = true
+            segmentSpeechFrames++
         } else {
             silentRun++
         }
@@ -269,6 +346,8 @@ class RadioService : Service() {
 
         sttEngine?.acceptAudioFrame(frame)
         segmentFrames++
+        val peakNow = framePeak(frame)
+        if (peakNow > segmentPeak) segmentPeak = peakNow
         when {
             segmentHasSpeech && silentRun >= HANGOVER_FRAMES -> finishSegment()
             segmentFrames >= MAX_SEGMENT_FRAMES -> finishSegment()
@@ -295,10 +374,12 @@ class RadioService : Service() {
         }
     }
 
-    private fun onRecognizedText(text: String) {
+    private fun onRecognizedText(raw: String, language: SupportedLanguage) {
+        val text = SttTextFilter.clean(raw)
+        if (text.isEmpty()) return
         _recognizedText.value = text
-        Log.d(LOG_TAG, "stt result chars=${text.length} alert=${_alertMode.value}")
-        val message = RadioFrame.Text(text, isAlert = _alertMode.value, languageCode = _language.value.code)
+        Log.d(LOG_TAG, "stt result chars=${text.length} alert=${_alertMode.value} text=\"$text\"")
+        val message = RadioFrame.Text(text, isAlert = _alertMode.value, languageCode = language.code)
         _transport.value?.send(RadioFrameCodec.encode(message))
     }
 
@@ -306,19 +387,24 @@ class RadioService : Service() {
         receiveJob?.cancel()
         watchdogJob?.cancel()
         audioPlayer.start()
+        startSpeakingSignals(transport)
 
         receiveJob = transport.incomingFrames()
             .onEach { bytes ->
-                lastPeerFrameAtMs = System.currentTimeMillis()
-                pttController.onPeerTransmitting(true)
-                when (val frame = RadioFrameCodec.decode(bytes)) {
+                val decoded = RadioFrameCodec.decode(bytes)
+                if (decoded !is RadioFrame.PeerSpeaking) {
+                    lastPeerFrameAtMs = System.currentTimeMillis()
+                    pttController.onPeerTransmitting(true)
+                }
+                when (val frame = decoded) {
+                    is RadioFrame.PeerSpeaking -> onPeerSpeakingSignal(frame.speaking)
                     is RadioFrame.Audio -> {
                         audioPlayer.playFrame(frame.pcm)
                         if (++audioFramesReceived % LOG_EVERY_N_FRAMES == 0L) Log.d(LOG_TAG, "rx audio frames=$audioFramesReceived")
                     }
                     is RadioFrame.Text -> {
                         val spoken = SupportedLanguage.fromCode(frame.languageCode) ?: _language.value
-                        Log.d(LOG_TAG, "rx text alert=${frame.isAlert} chars=${frame.text.length} language=${spoken.code}")
+                        Log.d(LOG_TAG, "rx text alert=${frame.isAlert} chars=${frame.text.length} language=${spoken.code} text=\"${frame.text}\"")
                         voices.speak(spoken, frame.text, frame.isAlert)
                     }
                     null -> Unit
@@ -342,6 +428,7 @@ class RadioService : Service() {
         stopCapture()
         receiveJob?.cancel()
         watchdogJob?.cancel()
+        speakingSignalJob?.cancel()
         audioPlayer.stop()
         vad.close()
         sttEngine?.stop()

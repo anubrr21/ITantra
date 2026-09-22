@@ -44,6 +44,7 @@ class IndicConformerSttEngine(
         languageMask = LanguageMask.selectedIndices(maskArray)
     }
 
+    private val recorder = UtteranceRecorder(context, "indic")
     private val bufferLock = Any()
     private val sessionLock = Any()
     private val bufferedPcm = ByteArrayOutputStream()
@@ -66,6 +67,7 @@ class IndicConformerSttEngine(
             snapshot
         }
         if (pcm.size < 2) return
+        recorder.save(pcm)
 
         val samples = FloatArray(pcm.size / 2)
         for (i in samples.indices) {

@@ -26,6 +26,9 @@ class SpeechScheduler(
     private val normalQueue = ArrayDeque<Job>()
     private var running = true
 
+    @Volatile
+    private var playing = false
+
     private val prefetchExecutor: ExecutorService = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "tts-prefetch").apply { isDaemon = true }
     }
@@ -59,6 +62,8 @@ class SpeechScheduler(
         return !worker.isAlive && prefetchDone
     }
 
+    fun isBusy(): Boolean = playing || lock.withLock { alertQueue.isNotEmpty() || normalQueue.isNotEmpty() }
+
     private fun isRunning(): Boolean = lock.withLock { running }
 
     private fun alertPending(): Boolean = lock.withLock { alertQueue.isNotEmpty() }
@@ -70,7 +75,12 @@ class SpeechScheduler(
                 if (!running) return
                 if (alertQueue.isNotEmpty()) alertQueue.removeFirst() else normalQueue.removeFirst()
             }
-            runCatching { if (job.isAlert) playAlert(job) else playNormal(job) }
+            playing = true
+            try {
+                runCatching { if (job.isAlert) playAlert(job) else playNormal(job) }
+            } finally {
+                playing = false
+            }
         }
     }
 
