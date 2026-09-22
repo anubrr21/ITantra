@@ -4,14 +4,13 @@ Kept up to date as phases complete. No fixed deadline — phases are ordered to 
 the hardest parts (multilingual accuracy, on-device performance) early rather than
 leaving them to the end.
 
-**Status:** As of 2026-09-17, Phases 0-3b compile and package into a real APK, and have
-now been **installed and exercised on a real physical phone** (Redmi A7 Pro 5G, 4GB
-RAM — genuinely low-end, exactly the spec's target hardware) via `adb`, one device at a
-time since a second phone isn't available yet. Real bugs were found and fixed, and the
-single biggest open risk in the whole project — whether the 880MB quantized
-IndicConformer model even loads on a low-end phone — passed. Full two-phone pairing is
-still untested. See "Build environment notes" and "Single-device real hardware testing"
-below for the details and why nobody should assume these are guesses.
+**Status:** As of 2026-09-22, **Phases 0-4 are complete and verified on two real
+phones** (Redmi A7 Pro 5G, 4GB RAM, and Redmi 13 5G, 8GB RAM) over both Bluetooth
+Classic and WiFi Direct: raw-audio walkie-talkie, push-to-talk and phone mode (full
+duplex, no echo), Hindi and English speech-to-text-to-speech with the correct voice for
+each message's language, and the alert path. See each phase's entry below, and "Two-phone
+testing" further down, for the real bugs found and fixed along the way. Next up is
+Phase 5 (formal round-trip latency measurement).
 
 - [x] **Phase 0 — Scaffold.** Repo, Android project skeleton, Gradle config, docs.
 - [x] **Phase 1 — Transport & PTT skeleton.** WiFi Direct + Bluetooth Classic behind a
@@ -102,9 +101,26 @@ below for the details and why nobody should assume these are guesses.
       recognizer had never actually run on a device until this fix. It is now covered by
       unit and on-device tests. (6) Audio routes to Bluetooth earbuds when connected, so
       alerts would not reach a loudspeaker; deciding whether alerts should force the
-      speaker is open. **Not done:** two-phone loop, and only Hindi has a neural voice.
-- [ ] **Phase 5 — Full loop validation.** Two phones, one in STT mode / one in TTS mode,
-      measure round-trip latency exactly as the spec's evaluation method describes.
+      speaker is open (left for Phase 7). (7) English STT was upgraded from Vosk small
+      (71% WER on the user's voice) to **Whisper base, int8, via the same sherpa-onnx
+      runtime as Piper** (12.5% WER on the laptop, 8.9% on-device at ~0.9s/utterance) —
+      see MODEL_NOTES.md. (8) Every text message now carries the sender's language code
+      (new frame tags, legacy tags unchanged) so the receiver always speaks it in the
+      language it was said in, regardless of what language that phone has selected —
+      fixes a real bug where an English message read by a phone left on Hindi came out
+      as nonsense. (9) Sentence segmentation was reworked to end an utterance on ~0.8s of
+      silence, on push-to-talk release, or after 28s, replacing an earlier "one sentence
+      per button press" version that produced multi-second latency on long holds.
+      **Two-phone loop is now fully verified**, including phone mode (open-mic, full
+      duplex): a half-duplex handshake (each phone signals when its own voice is
+      playing) stops the phones' microphones from picking up their own output, closing
+      a real echo/repeat bug found in testing. Still only Hindi has a neural voice
+      (Phase 6); alert-forces-speaker-over-Bluetooth is deferred to Phase 7.
+- [ ] **Phase 5 — Full loop validation.** Two-phone functional testing is done (see
+      Phase 4 and "Two-phone testing" below); this phase is the formal measurement:
+      instrument the app to log speech-end-to-speech-start timestamps and report a real
+      round-trip latency number per language, exactly as the spec's evaluation method
+      describes, instead of the stopwatch-by-eye "roughly 2-3s" observed during testing.
 - [ ] **Phase 6 — Multilingual expansion.** Repeat Phase 3/4's benchmark-and-pick pattern
       for Gujarati, Marathi, Kannada, Malayalam, Tamil, Telugu, Odia, Bengali. Add a
       language switcher to the UI and a per-language model manager.
@@ -119,11 +135,11 @@ below for the details and why nobody should assume these are guesses.
       evaluation metrics table.
 
 - [ ] **Phase 9 — Cross-language translation (after Phase 8, requested by the user).**
-      Today the app is speech -> text -> speech in the *same* language: text is sent as
-      recognized and the receiving phone reads it with its own voice, so English spoken on
-      one phone read by a phone set to Hindi is not translated (the Hindi voice cannot read
-      English). Planned: tag each text frame with its source language so the receiver can
-      pick the right voice, then add on-device machine translation (candidate: AI4Bharat
+      Today the app is speech -> text -> speech in the *same* language: each text frame
+      already carries the sender's language (done in Phase 4) so the receiver speaks it
+      correctly in that language, but it is not translated — English spoken on one phone
+      is read back in English regardless of what language the receiving phone has
+      selected. Planned: add on-device machine translation (candidate: AI4Bharat
       IndicTrans2 distilled ~200M, exported to ONNX and int8-quantized, with its
       SentencePiece preprocessing and a decoder in Kotlin), with a "translate to my
       language" switch. Needs a size/latency benchmark on the target phones like Phases 3
@@ -302,8 +318,25 @@ single-device testing could not reveal:
   translation (still Phase 9). Segmentation: an utterance ends after ~0.8s of silence, when the
   button is released, or after 28s, replacing both "cut at every pause" (fragments) and "one
   sentence per press" (9-17s latency with the Hindi recognizer on long presses).
-Verified end to end: Hindi spoken into phone 1 is recognized by IndicConformer, sent as
-text over Bluetooth and spoken by Piper (pratham) on phone 2; raw push-to-talk audio is
-smooth; user-measured speech-end to speech-start delay is roughly 2-3 seconds. WiFi Direct between the two phones
-also works: raw audio, Hindi text and alerts were received. Still to verify: phone mode
-(full duplex) and English voice -> text -> voice across the two phones.
+- **Phone mode echoed and repeated sentences.** Voice -> text in phone mode (no PTT
+  button) had three compounding bugs: (1) each phone only muted its own mic for a fixed
+  700ms after *it* finished speaking, with no way to know the *other* phone was still
+  talking, so a slow network or long reply let the mic reopen mid-playback and pick up
+  its own speaker; (2) switching language while a previous language's engine was still
+  loading could let the stale engine install itself after the new one, mixing results;
+  (3) Whisper occasionally repeats a phrase back-to-back on quiet or noisy audio (a known
+  failure mode, not an iTantra bug). Fixed with a real half-duplex handshake (each phone
+  broadcasts a `PeerSpeaking` frame the instant its own TTS starts/stops so the other
+  phone ignores its mic for the whole duration, not a fixed guess), a generation counter
+  that discards a stale in-flight engine load, and `SttTextFilter` collapsing an
+  exactly-repeated phrase while leaving genuine repeated words ("very very good") alone.
+  A segment is also now rejected as noise if it never has enough speech-classified frames
+  or never gets loud enough, instead of being sent as text.
+
+Verified end to end on both links (Bluetooth Classic and WiFi Direct): Hindi and English
+speech-to-text-to-speech in both push-to-talk and phone mode, each message spoken in its
+own language regardless of what the receiving phone has selected; alerts (loud,
+interrupt, resume); raw push-to-talk audio; phone mode conversation with no echo and no
+repeated sentences after the fixes above. User-measured speech-end to speech-start delay
+is roughly 2-3 seconds (Phase 5 turns this into a proper measurement, not a stopwatch
+estimate).
